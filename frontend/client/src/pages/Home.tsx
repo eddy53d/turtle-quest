@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { api, ApiError, getToken, loginPasskey, passkeySupported, registerPasskey, setToken, type ApiUser, type BoardRow, type CalendarDay, type Poke } from "@/lib/api";
+import { api, ApiError, fetchLoginOptions, fetchRegisterOptions, getToken, isInAppBrowser, loginPasskey, passkeyErrorMessage, passkeySupported, registerPasskey, setToken, type ApiUser, type BoardRow, type CalendarDay, type Poke, type PasskeyRequest } from "@/lib/api";
 import {
   ArrowRight,
   Bell,
@@ -129,6 +129,8 @@ export default function Home() {
   const [webauthnPending, setWebauthnPending] = useState(false);
   const [pinChange, setPinChange] = useState<null | { forced: boolean }>(null);
   const [passkeyAfterPinChange, setPasskeyAfterPinChange] = useState(false);
+  const [registerReq, setRegisterReq] = useState<PasskeyRequest | null>(null);
+  const [loginReq, setLoginReq] = useState<PasskeyRequest | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
@@ -191,6 +193,23 @@ export default function Home() {
     const timer = window.setInterval(refresh, 30_000);
     return () => window.clearInterval(timer);
   }, [showOnboarding]);
+
+  useEffect(() => {
+    setLoginReq(null);
+    const chosen = roster.find((member) => member.name === authName);
+    if (!showOnboarding || authStage !== "name" || !chosen?.has_passkey || !passkeySupported()) return;
+    let live = true;
+    fetchLoginOptions(authName).then((request) => live && setLoginReq(request)).catch(() => {});
+    return () => { live = false; };
+  }, [authName, authStage, showOnboarding, roster]);
+
+  // 패스키 등록 카드가 열리면 등록 옵션도 미리 받아둔다
+  useEffect(() => {
+    if (!webauthnPending) return;
+    let live = true;
+    fetchRegisterOptions().then((request) => live && setRegisterReq(request)).catch(handleError);
+    return () => { live = false; };
+  }, [webauthnPending]);
 
   useEffect(() => {
     if (!toast) return;
@@ -256,13 +275,12 @@ export default function Home() {
       return;
     }
     setPinError("");
-    const chosen = roster.find((member) => member.name === authName);
-    if (chosen?.has_passkey && passkeySupported()) {
+    if (loginReq) {
       try {
-        completeLogin(await loginPasskey(authName), false);
+        completeLogin(await loginPasskey(loginReq), false);
         return;
-      } catch {
-        // 취소했거나 패스키가 없는 기기 → PIN으로
+      } catch (error) {
+        setPinError(passkeyErrorMessage(error));  // 취소·실패해도 아래 PIN 단계로 진행
       }
     }
     setAuthStage("pin");
@@ -283,13 +301,17 @@ export default function Home() {
       notify("다음에 다시 로그인할 때 패스키를 연결할 수 있어요.");
       return;
     }
+    if (!registerReq) {
+      notify("잠시 후 다시 시도해 주세요.");
+      return;
+    }
     try {
-      await registerPasskey();
+      await registerPasskey(registerReq);
       notify("이 기기에 패스키를 연결했어요.");
+      setRegisterReq(null);
       api.members().then(setRoster);
     } catch (error) {
-      if (error instanceof ApiError) handleError(error);
-      else notify("패스키 연결을 취소했어요.");
+      notify(passkeyErrorMessage(error));
     }
   };
 
@@ -324,7 +346,7 @@ export default function Home() {
         </div>
         <div className="top-actions">
           <button className="icon-button notification-button" aria-label="알림" onClick={() => notify(pokes.length ? `최근 24시간 응원 ${pokes.length}개: ${Array.from(new Set(pokes.map((poke) => poke.from_name))).join(", ")}` : "아직 받은 응원이 없어요.")}><Bell size={18} />{pokes.length > 0 && <em>{pokes.length}</em>}</button>
-          <button className="profile-chip" onClick={logout}><span>{currentMember.initials}</span><b>{currentMember.name}</b><ChevronRight size={15} /></button>
+          <button className="profile-chip" onClick={() => { setShowOnboarding(true); setAuthStage("name"); setPin(""); setPinError(""); }}><span>{currentMember.initials}</span><b>{currentMember.name}</b><ChevronRight size={15} /></button>
         </div>
       </header>
 
@@ -415,14 +437,15 @@ export default function Home() {
       </div></div>}
 
       {showOnboarding && <div className="onboarding-backdrop"><div className="onboarding-card">
+        {currentUserId && <button className="modal-close" aria-label="닫기" onClick={() => { setShowOnboarding(false); setAuthStage("name"); setPin(""); setPinError(""); }}><X size={18} /></button>}
         <div className="onboarding-top"><div className="pixel-portal"><span>🐢</span></div><span className="onboarding-step">{authStage === "name" ? "01 / 02" : "02 / 02"}</span></div>
-        {authStage === "name" ? <><span className="section-kicker">WELCOME TO TURTLE QUEST</span><h2>나의 거북이를<br /><span>선택해 주세요.</span></h2><p className="onboarding-copy">이름을 선택하면 오늘의 기록을<br />안전하게 이어갈 수 있어요.</p><div className="name-grid">{roster.map((member) => <button key={member.id} className={authName === member.name ? "selected" : ""} onClick={() => { setAuthName(member.name); setPinError(""); }}><span style={{ background: colorsFor(member.sort_order)[0] }}>{member.name.slice(1)}</span>{member.name}{authName === member.name && <Check size={14} />}</button>)}</div><button className="primary-button onboarding-cta" onClick={chooseName} disabled={!roster.length}>다음으로 <ArrowRight size={17} /></button></> : <><span className="section-kicker">PRIVATE CHECKPOINT</span><h2>{authName}님, <span>PIN을 입력해요.</span></h2><p className="onboarding-copy">소그룹에서 전달받은 4자리 PIN으로<br />나의 루틴 기록을 보호해요.</p><div className="pin-dots">{[0, 1, 2, 3].map((index) => <i key={index} className={pin.length > index ? "filled" : ""} />)}</div><div className="pin-pad">{[1, 2, 3, 4, 5, 6, 7, 8, 9].map((number) => <button key={number} onClick={() => pin.length < 4 && setPin((previous) => previous + number)}>{number}</button>)}<button className="pad-action" onClick={() => setPin("")}><RotateCcw size={16} /></button><button onClick={() => pin.length < 4 && setPin((previous) => previous + "0")}>0</button><button className="pad-action" onClick={() => setPin((previous) => previous.slice(0, -1))}>⌫</button></div>{pinError && <p className="pin-error">{pinError}</p>}<button className="primary-button onboarding-cta" onClick={submitPin} disabled={pin.length !== 4 || busy}>PIN 인증하기 <LockKeyhole size={16} /></button><button className="text-button" onClick={() => setAuthStage("name")}>← 이름 다시 선택</button></>}
+        {authStage === "name" ? <><span className="section-kicker">WELCOME TO TURTLE QUEST</span><h2>나의 거북이를<br /><span>선택해 주세요.</span></h2><p className="onboarding-copy">이름을 선택하면 오늘의 기록을<br />안전하게 이어갈 수 있어요.</p><div className="name-grid">{roster.map((member) => <button key={member.id} className={authName === member.name ? "selected" : ""} onClick={() => { setAuthName(member.name); setPinError(""); }}><span style={{ background: colorsFor(member.sort_order)[0] }}>{member.name.slice(1)}</span>{member.name}{authName === member.name && <Check size={14} />}</button>)}</div><button className="primary-button onboarding-cta" onClick={chooseName} disabled={!roster.length}>다음으로 <ArrowRight size={17} /></button>{currentUserId && <button className="text-button" onClick={logout}>로그아웃</button>}</> : <><span className="section-kicker">PRIVATE CHECKPOINT</span><h2>{authName}님, <span>PIN을 입력해요.</span></h2><p className="onboarding-copy">소그룹에서 전달받은 4자리 PIN으로<br />나의 루틴 기록을 보호해요.</p><div className="pin-dots">{[0, 1, 2, 3].map((index) => <i key={index} className={pin.length > index ? "filled" : ""} />)}</div><div className="pin-pad">{[1, 2, 3, 4, 5, 6, 7, 8, 9].map((number) => <button key={number} onClick={() => pin.length < 4 && setPin((previous) => previous + number)}>{number}</button>)}<button className="pad-action" onClick={() => setPin("")}><RotateCcw size={16} /></button><button onClick={() => pin.length < 4 && setPin((previous) => previous + "0")}>0</button><button className="pad-action" onClick={() => setPin((previous) => previous.slice(0, -1))}>⌫</button></div>{pinError && <p className="pin-error">{pinError}</p>}<button className="primary-button onboarding-cta" onClick={submitPin} disabled={pin.length !== 4 || busy}>PIN 인증하기 <LockKeyhole size={16} /></button><button className="text-button" onClick={() => setAuthStage("name")}>← 이름 다시 선택</button></>}
         <p className="secure-note"><ShieldCheck size={13} /> 기록은 안전하게 암호화되어 저장돼요.</p>
       </div></div>}
 
       {pinChange && <PinChangeCard forced={pinChange.forced} onClose={closePinChange} onDone={(message) => { notify(message); closePinChange(); }} />}
 
-      {webauthnPending && <div className="modal-backdrop"><div className="passkey-card"><div className="passkey-icon"><ShieldCheck size={25} /></div><span className="section-kicker">ONE-TAP ACCESS</span><h2>다음부터 더 빠르게<br /><span>접속할까요?</span></h2><p>이 기기의 지문 또는 Face ID를<br />패스키로 연결할 수 있어요.</p><div className="passkey-actions"><button className="secondary-button" onClick={() => finishAuth(false)}>나중에</button><button className="primary-button" onClick={() => finishAuth(true)}>연결하기 <ArrowRight size={16} /></button></div></div></div>}
+      {webauthnPending && <div className="modal-backdrop"><div className="passkey-card"><div className="passkey-icon"><ShieldCheck size={25} /></div><span className="section-kicker">ONE-TAP ACCESS</span><h2>다음부터 더 빠르게<br /><span>접속할까요?</span></h2><p>이 기기의 지문 또는 Face ID를<br />패스키로 연결할 수 있어요.</p>{isInAppBrowser() && <p className="pin-error">카카오톡 안에서는 연결되지 않아요.<br />오른쪽 아래 메뉴에서 Safari로 열어주세요.</p>}<div className="passkey-actions"><button className="secondary-button" onClick={() => finishAuth(false)}>나중에</button><button className="primary-button" onClick={() => finishAuth(true)} disabled={!registerReq}>연결하기 <ArrowRight size={16} /></button></div></div></div>}
     </div>
   );
 }

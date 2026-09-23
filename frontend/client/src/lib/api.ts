@@ -54,48 +54,79 @@ const bufToB64u = (b: ArrayBuffer) => btoa(Array.from(new Uint8Array(b), c => St
 
 export const passkeySupported = () => typeof window !== "undefined" && !!window.PublicKeyCredential;
 
-export async function registerPasskey() {
-  const { options, challenge_token } = await call<{ options: any; challenge_token: string }>("/api/auth/webauthn/register-options", { method: "POST" });
-  const cred = (await navigator.credentials.create({
+/** 카카오톡·인스타 등 인앱 브라우저는 패스키(WebAuthn)를 막아둔 경우가 많다. */
+export const isInAppBrowser = () =>
+  typeof navigator !== "undefined" && /KAKAOTALK|Instagram|FBAN|FBAV|NAVER\(inapp|Line\//i.test(navigator.userAgent);
+
+export type PasskeyRequest = { options: any; challenge_token: string };
+
+// Safari(iOS/macOS)는 navigator.credentials 호출이 사용자 탭과 같은 실행 흐름에 있어야 한다.
+// 서버에서 옵션을 받아오는 fetch를 기다린 뒤 호출하면 그 사이 사용자 제스처가 만료돼 NotAllowedError가 난다.
+// 그래서 옵션은 미리 받아두고(fetch*Options), 버튼을 누르는 순간엔 곧바로 create/get을 호출한다.
+export const fetchRegisterOptions = () => call<PasskeyRequest>("/api/auth/webauthn/register-options", { method: "POST" });
+export const fetchLoginOptions = (name: string) => call<PasskeyRequest>("/api/auth/webauthn/verify-options", { body: { name } });
+
+export function registerPasskey({ options, challenge_token }: PasskeyRequest) {
+  const created = navigator.credentials.create({
     publicKey: {
       ...options,
       challenge: b64uToBuf(options.challenge),
       user: { ...options.user, id: b64uToBuf(options.user.id) },
       excludeCredentials: (options.excludeCredentials ?? []).map((c: any) => ({ ...c, id: b64uToBuf(c.id) })),
     },
-  })) as PublicKeyCredential;
-  const r = cred.response as AuthenticatorAttestationResponse;
-  await call("/api/auth/webauthn/register", {
-    body: {
-      challenge_token,
-      credential: {
-        id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type,
-        response: { clientDataJSON: bufToB64u(r.clientDataJSON), attestationObject: bufToB64u(r.attestationObject) },
+  });
+  return created.then((credential) => {
+    const cred = credential as PublicKeyCredential;
+    const r = cred.response as AuthenticatorAttestationResponse;
+    return call("/api/auth/webauthn/register", {
+      body: {
+        challenge_token,
+        credential: {
+          id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type,
+          response: { clientDataJSON: bufToB64u(r.clientDataJSON), attestationObject: bufToB64u(r.attestationObject) },
+        },
       },
-    },
+    });
   });
 }
 
-export async function loginPasskey(name: string): Promise<Session> {
-  const { options, challenge_token } = await call<{ options: any; challenge_token: string }>("/api/auth/webauthn/verify-options", { body: { name } });
-  const cred = (await navigator.credentials.get({
+export function loginPasskey({ options, challenge_token }: PasskeyRequest): Promise<Session> {
+  const got = navigator.credentials.get({
     publicKey: {
       ...options,
       challenge: b64uToBuf(options.challenge),
       allowCredentials: (options.allowCredentials ?? []).map((c: any) => ({ ...c, id: b64uToBuf(c.id) })),
     },
-  })) as PublicKeyCredential;
-  const r = cred.response as AuthenticatorAssertionResponse;
-  return call<Session>("/api/auth/webauthn/verify", {
-    body: {
-      challenge_token,
-      credential: {
-        id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type,
-        response: {
-          clientDataJSON: bufToB64u(r.clientDataJSON), authenticatorData: bufToB64u(r.authenticatorData),
-          signature: bufToB64u(r.signature), userHandle: r.userHandle ? bufToB64u(r.userHandle) : null,
+  });
+  return got.then((credential) => {
+    const cred = credential as PublicKeyCredential;
+    const r = cred.response as AuthenticatorAssertionResponse;
+    return call<Session>("/api/auth/webauthn/verify", {
+      body: {
+        challenge_token,
+        credential: {
+          id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type,
+          response: {
+            clientDataJSON: bufToB64u(r.clientDataJSON), authenticatorData: bufToB64u(r.authenticatorData),
+            signature: bufToB64u(r.signature), userHandle: r.userHandle ? bufToB64u(r.userHandle) : null,
+          },
         },
       },
-    },
+    });
   });
+}
+
+/** 취소·시간초과·미지원을 사람이 읽을 수 있는 문구로. */
+export function passkeyErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message;
+  const name = error instanceof Error ? error.name : "";
+  if (name === "NotAllowedError") {
+    return isInAppBrowser()
+      ? "카카오톡 등 앱 안의 브라우저에서는 지문·Face ID를 쓸 수 없어요. Safari나 크롬으로 열어주세요."
+      : "패스키 연결을 취소했거나 시간이 지났어요. 다시 시도해 주세요.";
+  }
+  if (name === "InvalidStateError") return "이 기기에는 이미 패스키가 등록돼 있어요.";
+  if (name === "SecurityError") return "이 주소에서는 패스키를 쓸 수 없어요. 관리자에게 알려주세요.";
+  if (name === "NotSupportedError") return "이 기기는 패스키를 지원하지 않아요. PIN으로 로그인해 주세요.";
+  return error instanceof Error ? `패스키 오류: ${error.name}` : "패스키를 사용할 수 없어요.";
 }
