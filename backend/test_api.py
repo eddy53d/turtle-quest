@@ -70,6 +70,20 @@ def test_flow(monkeypatch):
         t2 = cl.post("/api/auth/login-pin", json={"name": "강서진", "pin": PINS["강서진"]}).json()["token"]
         assert cl.get("/api/social/pokes", headers={"Authorization": f"Bearer {t2}"}).json()[0]["from_name"] == "홍승원"
 
+        # PIN 변경: 공통 PIN 사용자는 must_change_pin, 바꾸면 새 PIN으로만 로그인
+        with psycopg.connect(pg.get_uri(), autocommit=True) as db:
+            db.execute("update users set pin_code = '0412' where name = '양시윤'")
+        s3 = cl.post("/api/auth/login-pin", json={"name": "양시윤", "pin": "0412"}).json()
+        assert s3["user"]["must_change_pin"] is True
+        h3 = {"Authorization": f"Bearer {s3['token']}"}
+        assert cl.post("/api/auth/change-pin", json={"current_pin": "9999", "new_pin": "8274"}, headers=h3).status_code == 401
+        assert cl.post("/api/auth/change-pin", json={"current_pin": "0412", "new_pin": "0412"}, headers=h3).status_code == 400
+        assert cl.post("/api/auth/change-pin", json={"current_pin": "0412", "new_pin": "1234"}, headers=h3).status_code == 400
+        assert cl.post("/api/auth/change-pin", json={"current_pin": "0412", "new_pin": "8274"}, headers=h3).status_code == 200
+        assert cl.post("/api/auth/login-pin", json={"name": "양시윤", "pin": "0412"}).status_code == 401
+        assert cl.post("/api/auth/login-pin", json={"name": "양시윤", "pin": "8274"}).json()["user"]["must_change_pin"] is False
+        assert "must_change_pin" not in cl.get("/api/members").json()[0]  # 목록에는 노출 금지
+
         o = cl.post("/api/auth/webauthn/register-options", headers=h).json()
         assert o["options"]["rp"]["id"] == "localhost" and o["challenge_token"]
         assert cl.post("/api/auth/webauthn/verify-options", json={"name": "홍승원"}).status_code == 404

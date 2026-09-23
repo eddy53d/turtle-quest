@@ -31,6 +31,7 @@ KST = ZoneInfo("Asia/Seoul")
 JWT_SECRET = os.environ["JWT_SECRET"]  # 필수: 32자 이상 랜덤 문자열
 RP_ID = os.environ.get("RP_ID", "localhost")
 ORIGINS = [o.strip() for o in os.environ.get("ORIGINS", "http://localhost:3000").split(",") if o.strip()]
+DEFAULT_PIN = os.environ.get("DEFAULT_PIN", "0412")  # 공통 초기 PIN — 로그인하면 변경을 요구
 BASE_STEP, SPURT_STEP = 5, 10  # 첫 인증 +5m, 같은 날 두 번째 인증 +10m(보너스 5m 포함) — shared/quest.ts와 동일
 
 # ── 날짜/스트릭 로직 (KST, 순수 함수) ────────────────────────────────────────
@@ -104,7 +105,11 @@ def current_user(authorization: str = Header("")) -> str:
 
 
 def user_public(u: dict) -> dict:
-    return {"id": str(u["id"]), "name": u["name"], "sort_order": u["sort_order"], "has_passkey": bool(u["credential_id"])}
+    out = {"id": str(u["id"]), "name": u["name"], "sort_order": u["sort_order"], "has_passkey": bool(u["credential_id"])}
+    # 공개 목록에는 넣지 않음 — 누가 아직 공통 PIN을 쓰는지 드러나면 안 됨
+    if "pin_code" in u:
+        out["must_change_pin"] = u["pin_code"] == DEFAULT_PIN
+    return out
 
 
 # ponytail: 프로세스 메모리 카운터 — 인스턴스 1개 전제. 스케일아웃하면 DB 컬럼으로 옮길 것.
@@ -134,6 +139,24 @@ def login_pin(body: PinLogin):
         raise HTTPException(401, "이름 또는 PIN이 맞지 않아요.")
     _pin_fails.pop(body.name, None)
     return {"token": make_token(u["id"]), "user": user_public(u)}
+
+
+class ChangePin(BaseModel):
+    current_pin: str = Field(pattern=r"^\d{4}$")
+    new_pin: str = Field(pattern=r"^\d{4}$")
+
+
+@app.post("/api/auth/change-pin")
+def change_pin(body: ChangePin, uid: str = Depends(current_user)):
+    u = q("select * from users where id = %s", uid, one=True)
+    if not hmac.compare_digest(u["pin_code"], body.current_pin):
+        raise HTTPException(401, "현재 PIN이 맞지 않아요.")
+    if body.new_pin == DEFAULT_PIN:
+        raise HTTPException(400, "공통 PIN은 새 PIN으로 쓸 수 없어요.")
+    if body.new_pin in {"0000", "1111", "1234", "2222", "3333", "4444", "5555", "6666", "7777", "8888", "9999"}:
+        raise HTTPException(400, "너무 쉬운 PIN이에요. 다른 번호로 정해 주세요.")
+    q("update users set pin_code = %s where id = %s", body.new_pin, uid)
+    return {"ok": True}
 
 
 @app.get("/api/me")

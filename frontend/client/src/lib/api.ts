@@ -2,7 +2,7 @@
 const BASE = (import.meta.env.VITE_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
 const TOKEN_KEY = "turtleQuestToken";
 
-export type ApiUser = { id: string; name: string; sort_order: number; has_passkey: boolean };
+export type ApiUser = { id: string; name: string; sort_order: number; has_passkey: boolean; must_change_pin?: boolean };
 export type BoardRow = {
   rank: number; id: string; name: string; sort_order: number; total_distance: number; streak: number;
   today: { qt: boolean; exercise: boolean }; memo: string; cheers: number;
@@ -41,6 +41,7 @@ export const api = {
   leaderboard: () => call<BoardRow[]>("/api/race/leaderboard"),
   check: (type: "qt" | "exercise") =>
     call<{ advance: number; total_distance: number; streak: number }>("/api/activity/check", { body: { type } }),
+  changePin: (current_pin: string, new_pin: string) => call("/api/auth/change-pin", { body: { current_pin, new_pin } }),
   saveMemo: (memo: string) => call("/api/activity/memo", { method: "PUT", body: { memo } }),
   calendar: (userId: string, month: string) => call<CalendarDay[]>(`/api/activity/${userId}/calendar?month=${month}`),
   poke: (toUserId: string) => call("/api/social/poke", { body: { to_user_id: toUserId } }),

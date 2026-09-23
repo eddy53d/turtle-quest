@@ -127,6 +127,8 @@ export default function Home() {
   const [pin, setPin] = useState("");
   const [pinError, setPinError] = useState("");
   const [webauthnPending, setWebauthnPending] = useState(false);
+  const [pinChange, setPinChange] = useState<null | { forced: boolean }>(null);
+  const [passkeyAfterPinChange, setPasskeyAfterPinChange] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
@@ -231,7 +233,21 @@ export default function Home() {
     setPin("");
     setPinError("");
     setShowOnboarding(false);
-    if (offerPasskey && !session.user.has_passkey && passkeySupported()) setWebauthnPending(true);
+    const wantPasskey = offerPasskey && !session.user.has_passkey && passkeySupported();
+    if (session.user.must_change_pin) {
+      setPinChange({ forced: true });
+      setPasskeyAfterPinChange(wantPasskey);
+      return;
+    }
+    if (wantPasskey) setWebauthnPending(true);
+  };
+
+  const closePinChange = () => {
+    setPinChange(null);
+    if (passkeyAfterPinChange) {
+      setPasskeyAfterPinChange(false);
+      setWebauthnPending(true);
+    }
   };
 
   const chooseName = async () => {
@@ -385,7 +401,7 @@ export default function Home() {
         <button className={activeTab === "race" ? "active" : ""} onClick={() => setActiveTab("race")}><Trophy size={19} /><span>레이스</span></button>
         <button className={activeTab === "routine" ? "active" : ""} onClick={() => setActiveTab("routine")}><CalendarDays size={19} /><span>루틴</span></button>
         <button className={activeTab === "record" ? "active" : ""} onClick={() => setActiveTab("record")}><Medal size={19} /><span>기록</span></button>
-        <button onClick={() => notify("소그룹 설정은 리더 권한에서 열려요.")}><MoreHorizontal size={19} /><span>더보기</span></button>
+        <button onClick={() => (getToken() ? setPinChange({ forced: false }) : notify("먼저 로그인해 주세요."))}><MoreHorizontal size={19} /><span>더보기</span></button>
       </nav>
 
       {toast && <div className="toast-message"><Sparkles size={15} />{toast}</div>}
@@ -403,6 +419,8 @@ export default function Home() {
         {authStage === "name" ? <><span className="section-kicker">WELCOME TO TURTLE QUEST</span><h2>나의 거북이를<br /><span>선택해 주세요.</span></h2><p className="onboarding-copy">이름을 선택하면 오늘의 기록을<br />안전하게 이어갈 수 있어요.</p><div className="name-grid">{roster.map((member) => <button key={member.id} className={authName === member.name ? "selected" : ""} onClick={() => { setAuthName(member.name); setPinError(""); }}><span style={{ background: colorsFor(member.sort_order)[0] }}>{member.name.slice(1)}</span>{member.name}{authName === member.name && <Check size={14} />}</button>)}</div><button className="primary-button onboarding-cta" onClick={chooseName} disabled={!roster.length}>다음으로 <ArrowRight size={17} /></button></> : <><span className="section-kicker">PRIVATE CHECKPOINT</span><h2>{authName}님, <span>PIN을 입력해요.</span></h2><p className="onboarding-copy">소그룹에서 전달받은 4자리 PIN으로<br />나의 루틴 기록을 보호해요.</p><div className="pin-dots">{[0, 1, 2, 3].map((index) => <i key={index} className={pin.length > index ? "filled" : ""} />)}</div><div className="pin-pad">{[1, 2, 3, 4, 5, 6, 7, 8, 9].map((number) => <button key={number} onClick={() => pin.length < 4 && setPin((previous) => previous + number)}>{number}</button>)}<button className="pad-action" onClick={() => setPin("")}><RotateCcw size={16} /></button><button onClick={() => pin.length < 4 && setPin((previous) => previous + "0")}>0</button><button className="pad-action" onClick={() => setPin((previous) => previous.slice(0, -1))}>⌫</button></div>{pinError && <p className="pin-error">{pinError}</p>}<button className="primary-button onboarding-cta" onClick={submitPin} disabled={pin.length !== 4 || busy}>PIN 인증하기 <LockKeyhole size={16} /></button><button className="text-button" onClick={() => setAuthStage("name")}>← 이름 다시 선택</button></>}
         <p className="secure-note"><ShieldCheck size={13} /> 기록은 안전하게 암호화되어 저장돼요.</p>
       </div></div>}
+
+      {pinChange && <PinChangeCard forced={pinChange.forced} onClose={closePinChange} onDone={(message) => { notify(message); closePinChange(); }} />}
 
       {webauthnPending && <div className="modal-backdrop"><div className="passkey-card"><div className="passkey-icon"><ShieldCheck size={25} /></div><span className="section-kicker">ONE-TAP ACCESS</span><h2>다음부터 더 빠르게<br /><span>접속할까요?</span></h2><p>이 기기의 지문 또는 Face ID를<br />패스키로 연결할 수 있어요.</p><div className="passkey-actions"><button className="secondary-button" onClick={() => finishAuth(false)}>나중에</button><button className="primary-button" onClick={() => finishAuth(true)}>연결하기 <ArrowRight size={16} /></button></div></div></div>}
     </div>
@@ -434,4 +452,64 @@ function RecordView({ currentMember, members }: { currentMember: Member; members
 
   const first = week[0], last = week[6];
   return <section className="record-page"><div className="section-heading"><div><span className="section-kicker">MY PIXEL GARDEN</span><h2>{currentMember.name}님의 기록</h2></div><span className="board-date">{now.getMonth() + 1}월 <CalendarDays size={14} /></span></div><div className="record-hero"><div><span className="section-kicker">CURRENT STREAK</span><strong>{currentMember.streak}<small> DAYS</small></strong><p>꾸준함이 가장 빠른 길이에요.</p></div><div className="record-medal"><Medal size={25} /><span>TOP<br /><b>{currentMember.rank || "-"}</b></span></div></div><div className="calendar-card"><div className="calendar-head"><b>이번 주 심은 씨앗</b><span>{first.getMonth() + 1}. {first.getDate()} — {last.getMonth() + 1}. {last.getDate()}</span></div><div className="week-labels">{days.map((day) => <span key={day}>{day}</span>)}</div><div className="pixel-garden">{week.map((date, index) => { const entry = log[isoDate(date)]; const active = !!entry && (entry.qt || entry.exercise); const full = !!entry && entry.qt && entry.exercise; return <div className="garden-day" key={days[index]} title={entry?.memo ?? undefined}><div className={`garden-tile ${active ? "active" : ""}`}><span>{full ? "✦" : active ? "·" : ""}</span>{active && <i />}</div><small>{date.getDate()}</small></div>; })}</div><div className="garden-legend"><span><i className="garden-dot devotional" /> 큐티</span><span><i className="garden-dot exercise" /> 운동</span><span><i className="garden-dot full" /> 두 가지 모두</span></div></div><div className="record-stats"><div><b>{members.reduce((sum, member) => sum + member.streak, 0)}</b><small>소그룹 연속일 합계</small></div><div><b>{currentMember.distance}m</b><small>나의 누적 이동</small></div></div></section>;
+}
+
+function PinChangeCard({ forced, onClose, onDone }: { forced: boolean; onClose: () => void; onDone: (message: string) => void }) {
+  const steps = ["현재 PIN을 입력해요.", "새 PIN 4자리를 정해요.", "한 번 더 눌러 확인해요."];
+  const [step, setStep] = useState(0);
+  const [entered, setEntered] = useState<string[]>(["", "", ""]);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const pin = entered[step];
+
+  const back = () => {
+    setError("");
+    setEntered((prev) => prev.map((value, index) => (index >= step ? "" : value)));
+    setStep((prev) => Math.max(0, prev - 1));
+  };
+
+  const push = (digit: string) => {
+    if (pin.length >= 4 || busy) return;
+    const next = pin + digit;
+    setEntered((prev) => prev.map((value, index) => (index === step ? next : value)));
+    if (next.length < 4) return;
+    setError("");
+    if (step < 2) {
+      setStep(step + 1);
+      return;
+    }
+    const [current, fresh] = entered;
+    if (next !== fresh) {
+      setError("새 PIN이 서로 달라요. 다시 입력해 주세요.");
+      setEntered([current, "", ""]);
+      setStep(1);
+      return;
+    }
+    setBusy(true);
+    api.changePin(current, fresh)
+      .then(() => onDone("PIN을 바꿨어요. 다음 로그인부터 새 PIN을 사용해요."))
+      .catch((apiError) => {
+        setError(apiError instanceof ApiError ? apiError.message : "서버에 연결하지 못했어요.");
+        setEntered(apiError instanceof ApiError && apiError.status === 401 ? ["", "", ""] : [current, "", ""]);
+        setStep(apiError instanceof ApiError && apiError.status === 401 ? 0 : 1);
+      })
+      .finally(() => setBusy(false));
+  };
+
+  return <div className="onboarding-backdrop"><div className="onboarding-card">
+    <div className="onboarding-top"><div className="pixel-portal"><span>🔒</span></div><span className="onboarding-step">{String(step + 1).padStart(2, "0")} / 03</span></div>
+    <span className="section-kicker">MY PIN</span>
+    <h2>{forced ? <>공통 PIN을 <span>내 PIN으로 바꿔요.</span></> : <>PIN을 <span>바꿀 수 있어요.</span></>}</h2>
+    <p className="onboarding-copy">{steps[step]}{forced && step === 0 && <><br />처음 받은 공통 PIN을 넣어주세요.</>}</p>
+    <div className="pin-dots">{[0, 1, 2, 3].map((index) => <i key={index} className={pin.length > index ? "filled" : ""} />)}</div>
+    <div className="pin-pad">
+      {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((number) => <button key={number} onClick={() => push(String(number))}>{number}</button>)}
+      <button className="pad-action" onClick={back}><RotateCcw size={16} /></button>
+      <button onClick={() => push("0")}>0</button>
+      <button className="pad-action" onClick={() => setEntered((prev) => prev.map((value, index) => (index === step ? value.slice(0, -1) : value)))}>⌫</button>
+    </div>
+    {error && <p className="pin-error">{error}</p>}
+    {!forced && <button className="text-button" onClick={onClose} disabled={busy}>나중에 하기</button>}
+    <p className="secure-note"><ShieldCheck size={13} /> 바뀐 PIN은 서버에 저장돼요.</p>
+  </div></div>;
 }

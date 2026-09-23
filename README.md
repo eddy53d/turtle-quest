@@ -14,6 +14,7 @@ SQL Editor에 `backend/schema.sql` 전체 붙여넣고 실행 → 마지막 결�
   - `JWT_SECRET` 32자 이상 랜덤 (`python -c "import secrets;print(secrets.token_urlsafe(48))"`)
   - `RP_ID` 프론트 도메인만 (예: `turtle-quest.vercel.app`) — 패스키가 이 도메인에 묶임
   - `ORIGINS` 프론트 origin, 쉼표 구분 (예: `https://turtle-quest.vercel.app`)
+  - `DEFAULT_PIN` (선택) 공통 초기 PIN, 기본값 `0412`. 이 PIN으로 로그인하면 앱이 변경 화면을 띄움
 
 ## 3. 프론트 (Vercel)
 - Root: `frontend`, 환경변수 `VITE_API_URL` = 백엔드 URL
@@ -23,6 +24,7 @@ SQL Editor에 `backend/schema.sql` 전체 붙여넣고 실행 → 마지막 결�
 |---|---|
 | `GET /api/members` | 이름 선택용 목록 (자주 인증하는 6명 상단) |
 | `POST /api/auth/login-pin` | `{name, pin}` → `{token, user}` (5회 실패 시 5분 잠금) |
+| `POST /api/auth/change-pin` | `{current_pin, new_pin}` 본인 PIN 변경. 공통 PIN(`0412`)·쉬운 번호는 거부 |
 | `POST /api/auth/webauthn/register-options` → `register` | PIN 로그인 후 패스키 등록 |
 | `POST /api/auth/webauthn/verify-options` → `verify` | `{name}` → 생체 인증 → `{token, user}` |
 | `POST /api/activity/check` | `{type: qt\|exercise, memo?}` 첫 인증 +5m, 같은 날 두 번째 +10m(보너스 포함) |
