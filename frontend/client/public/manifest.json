@@ -2,7 +2,7 @@
   "name": "Turtle Quest · 소그룹 큐티 레이스",
   "short_name": "Turtle Quest",
   "description": "큐티와 운동으로 함께 전진하는 다락방 2소그룹 레이스",
-  "start_url": "/?demo=1",
+  "start_url": "/",
   "display": "standalone",
   "background_color": "#f7f6f1",
   "theme_color": "#f7f6f1",
