@@ -85,6 +85,9 @@ def q(sql: str, *args, one=False):
     return (rows[0] if rows else None) if one else rows
 
 
+USER_SQL = "select u.*, exists(select 1 from passkeys p where p.user_id = u.id) has_passkey from users u"
+
+
 # ── 인증 ─────────────────────────────────────────────────────────────────────
 def make_token(user_id, ttl: timedelta = timedelta(days=30), **extra) -> str:
     return jwt.encode({"sub": str(user_id), "exp": datetime.now(KST) + ttl, **extra}, JWT_SECRET, "HS256")
@@ -104,8 +107,16 @@ def current_user(authorization: str = Header("")) -> str:
     return read_token(authorization.removeprefix("Bearer ").strip())["sub"]
 
 
+def load_user(uid) -> dict:
+    """토큰은 살아 있는데 DB에 사람이 없는 경우(계정 삭제 등)엔 다시 로그인시킨다."""
+    u = q(f"{USER_SQL} where u.id = %s", uid, one=True)
+    if not u:
+        raise HTTPException(401, "다시 로그인해 주세요.")
+    return u
+
+
 def user_public(u: dict) -> dict:
-    out = {"id": str(u["id"]), "name": u["name"], "sort_order": u["sort_order"], "has_passkey": bool(u["credential_id"])}
+    out = {"id": str(u["id"]), "name": u["name"], "sort_order": u["sort_order"], "has_passkey": bool(u.get("has_passkey"))}
     # 공개 목록에는 넣지 않음 — 누가 아직 공통 PIN을 쓰는지 드러나면 안 됨
     if "pin_code" in u:
         out["must_change_pin"] = u["pin_code"] == DEFAULT_PIN
@@ -125,7 +136,9 @@ class PinLogin(BaseModel):
 @app.get("/api/members")
 def members():
     """로그인 전 이름 선택 화면용 (자주 인증하는 6명이 위)."""
-    return [user_public(u) for u in q("select id, name, sort_order, credential_id from users order by sort_order, name")]
+    return [user_public(u) for u in q(
+        "select u.id, u.name, u.sort_order, exists(select 1 from passkeys p where p.user_id = u.id) has_passkey "
+        "from users u order by u.sort_order, u.name")]
 
 
 @app.post("/api/auth/login-pin")
@@ -133,7 +146,7 @@ def login_pin(body: PinLogin):
     fails, since = _pin_fails.get(body.name, (0, 0.0))
     if fails >= MAX_FAILS and time.time() - since < LOCK_SECONDS:
         raise HTTPException(429, "PIN을 여러 번 틀렸어요. 5분 뒤에 다시 시도해 주세요.")
-    u = q("select * from users where name = %s", body.name, one=True)
+    u = q(f"{USER_SQL} where u.name = %s", body.name, one=True)
     if not u or not hmac.compare_digest(u["pin_code"], body.pin):
         _pin_fails[body.name] = (fails + 1 if fails < MAX_FAILS else 1, time.time())
         raise HTTPException(401, "이름 또는 PIN이 맞지 않아요.")
@@ -148,7 +161,7 @@ class ChangePin(BaseModel):
 
 @app.post("/api/auth/change-pin")
 def change_pin(body: ChangePin, uid: str = Depends(current_user)):
-    u = q("select * from users where id = %s", uid, one=True)
+    u = load_user(uid)
     if not hmac.compare_digest(u["pin_code"], body.current_pin):
         raise HTTPException(401, "현재 PIN이 맞지 않아요.")
     if body.new_pin == DEFAULT_PIN:
@@ -161,7 +174,7 @@ def change_pin(body: ChangePin, uid: str = Depends(current_user)):
 
 @app.get("/api/me")
 def me(uid: str = Depends(current_user)):
-    return user_public(q("select * from users where id = %s", uid, one=True))
+    return user_public(load_user(uid))
 
 
 # WebAuthn: challenge는 서버에 저장하지 않고 5분짜리 서명 토큰에 담아 왕복(무료 호스팅 재시작에도 안전).
@@ -176,9 +189,11 @@ class RegisterBody(BaseModel):
 
 @app.post("/api/auth/webauthn/register-options")
 def webauthn_register_options(uid: str = Depends(current_user)):
-    u = q("select * from users where id = %s", uid, one=True)
+    u = load_user(uid)
+    mine = q("select credential_id from passkeys where user_id = %s", uid)
     opts = webauthn.generate_registration_options(
         rp_id=RP_ID, rp_name="Turtle Quest", user_name=u["name"], user_id=str(u["id"]).encode(),
+        exclude_credentials=[PublicKeyCredentialDescriptor(id=base64url_to_bytes(p["credential_id"])) for p in mine],
         authenticator_selection=AuthenticatorSelectionCriteria(
             resident_key=ResidentKeyRequirement.PREFERRED, user_verification=UserVerificationRequirement.PREFERRED),
     )
@@ -196,8 +211,10 @@ def webauthn_register(body: RegisterBody, uid: str = Depends(current_user)):
             expected_rp_id=RP_ID, expected_origin=ORIGINS)
     except Exception as e:
         raise HTTPException(400, f"패스키 등록 실패: {e}")
-    q("update users set credential_id = %s, public_key = %s, sign_count = %s where id = %s",
-      bytes_to_base64url(v.credential_id), v.credential_public_key, v.sign_count, uid)
+    q("insert into passkeys (credential_id, user_id, public_key, sign_count) values (%s, %s, %s, %s) "
+      "on conflict (credential_id) do update set user_id = excluded.user_id, public_key = excluded.public_key, "
+      "sign_count = excluded.sign_count",
+      bytes_to_base64url(v.credential_id), uid, v.credential_public_key, v.sign_count)
     return {"ok": True}
 
 
@@ -212,28 +229,33 @@ class VerifyBody(BaseModel):
 
 @app.post("/api/auth/webauthn/verify-options")
 def webauthn_verify_options(body: VerifyOptionsBody):
-    u = q("select * from users where name = %s and credential_id is not null", body.name, one=True)
-    if not u:
-        raise HTTPException(404, "이 기기에 등록된 패스키가 없어요. PIN으로 로그인해 주세요.")
+    u = q("select id from users where name = %s", body.name, one=True)
+    mine = q("select credential_id from passkeys where user_id = %s", u["id"]) if u else []
+    if not mine:
+        raise HTTPException(404, "등록된 지문·Face ID가 없어요. PIN으로 로그인해 주세요.")
     opts = webauthn.generate_authentication_options(
-        rp_id=RP_ID, allow_credentials=[PublicKeyCredentialDescriptor(id=base64url_to_bytes(u["credential_id"]))])
+        rp_id=RP_ID,
+        allow_credentials=[PublicKeyCredentialDescriptor(id=base64url_to_bytes(p["credential_id"])) for p in mine])
     return {"options": json.loads(webauthn.options_to_json(opts)), "challenge_token": challenge_token(u["id"], opts.challenge, "auth")}
 
 
 @app.post("/api/auth/webauthn/verify")
 def webauthn_verify(body: VerifyBody):
     claims = read_token(body.challenge_token, "auth")
-    u = q("select * from users where id = %s", claims["sub"], one=True)
-    if not u or u["credential_id"] != body.credential.get("id"):
-        raise HTTPException(401, "등록된 패스키와 달라요.")
+    key = q("select * from passkeys where credential_id = %s and user_id = %s",
+            body.credential.get("id"), claims["sub"], one=True)
+    if not key:
+        raise HTTPException(401, "이 기기의 지문·Face ID는 등록되어 있지 않아요.")
     try:
         v = webauthn.verify_authentication_response(
             credential=body.credential, expected_challenge=base64url_to_bytes(claims["chal"]),
             expected_rp_id=RP_ID, expected_origin=ORIGINS,
-            credential_public_key=bytes(u["public_key"]), credential_current_sign_count=u["sign_count"])
+            credential_public_key=bytes(key["public_key"]), credential_current_sign_count=key["sign_count"])
     except Exception as e:
         raise HTTPException(401, f"생체 인증 실패: {e}")
-    q("update users set sign_count = %s where id = %s", v.new_sign_count, u["id"])
+    q("update passkeys set sign_count = %s, last_used_at = now() where credential_id = %s",
+      v.new_sign_count, key["credential_id"])
+    u = q(f"{USER_SQL} where u.id = %s", key["user_id"], one=True)
     return {"token": make_token(u["id"]), "user": user_public(u)}
 
 

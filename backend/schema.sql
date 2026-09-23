@@ -6,12 +6,20 @@ create table if not exists users (
   name          text not null unique,
   dob           date,                                  -- 관리자가 나중에 update
   pin_code      text not null check (pin_code ~ '^[0-9]{4}$'),
-  credential_id text unique,                           -- WebAuthn credential id (base64url)
-  public_key    bytea,                                 -- WebAuthn 공개키 (검증에 필수)
-  sign_count    bigint not null default 0,
   turtle_items  jsonb  not null default '[]'::jsonb,
   sort_order    int    not null default 100            -- 목록 표기 순서 (낮을수록 위)
 );
+
+-- 기기 하나당 한 줄. 한 사람이 폰·태블릿·노트북을 각각 등록할 수 있다.
+create table if not exists passkeys (
+  credential_id text primary key,                      -- WebAuthn credential id (base64url)
+  user_id       uuid not null references users(id) on delete cascade,
+  public_key    bytea not null,                        -- 검증에 필수
+  sign_count    bigint not null default 0,
+  created_at    timestamptz not null default now(),
+  last_used_at  timestamptz
+);
+create index if not exists passkeys_user_idx on passkeys (user_id);
 
 create table if not exists activities (
   id         uuid primary key default gen_random_uuid(),
@@ -42,6 +50,7 @@ create index if not exists pokes_to_idx on pokes (to_user, created_at desc);
 
 -- 백엔드만 DATABASE_URL(postgres 롤)로 접근. anon 키로는 못 읽게 RLS on + 정책 없음.
 alter table users      enable row level security;
+alter table passkeys   enable row level security;
 alter table activities enable row level security;
 alter table race_stats enable row level security;
 alter table pokes      enable row level security;

@@ -48,6 +48,7 @@ type Member = {
 
 const GUIDE_IMAGE_URL = "/manus-storage/guide-otter_fa06dbfa.png";
 const SEEN_POKE_KEY = "turtleQuestSeenPoke";
+const PASSKEY_DEVICE_KEY = "turtleQuestPasskeyDevice";  // 이 기기에서 지문 등록을 마친 사용자 id
 
 // 멤버 순서(sort_order)별 거북이 등껍질/포인트 색
 const PALETTE: [string, string][] = [
@@ -131,6 +132,7 @@ export default function Home() {
   const [passkeyAfterPinChange, setPasskeyAfterPinChange] = useState(false);
   const [registerReq, setRegisterReq] = useState<PasskeyRequest | null>(null);
   const [loginReq, setLoginReq] = useState<PasskeyRequest | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
@@ -205,11 +207,11 @@ export default function Home() {
 
   // 패스키 등록 카드가 열리면 등록 옵션도 미리 받아둔다
   useEffect(() => {
-    if (!webauthnPending) return;
+    if (!webauthnPending && !moreOpen) return;
     let live = true;
     fetchRegisterOptions().then((request) => live && setRegisterReq(request)).catch(handleError);
     return () => { live = false; };
-  }, [webauthnPending]);
+  }, [webauthnPending, moreOpen]);
 
   useEffect(() => {
     if (!toast) return;
@@ -252,7 +254,8 @@ export default function Home() {
     setPin("");
     setPinError("");
     setShowOnboarding(false);
-    const wantPasskey = offerPasskey && !session.user.has_passkey && passkeySupported();
+    const wantPasskey = offerPasskey && passkeySupported()
+      && localStorage.getItem(PASSKEY_DEVICE_KEY) !== session.user.id;
     if (session.user.must_change_pin) {
       setPinChange({ forced: true });
       setPasskeyAfterPinChange(wantPasskey);
@@ -298,7 +301,8 @@ export default function Home() {
   const finishAuth = async (register: boolean) => {
     setWebauthnPending(false);
     if (!register) {
-      notify("다음에 다시 로그인할 때 패스키를 연결할 수 있어요.");
+      if (currentUserId) localStorage.setItem(PASSKEY_DEVICE_KEY, currentUserId);
+      notify("나중에 '더보기'에서 등록할 수 있어요.");
       return;
     }
     if (!registerReq) {
@@ -307,8 +311,10 @@ export default function Home() {
     }
     try {
       await registerPasskey(registerReq);
-      notify("이 기기에 패스키를 연결했어요.");
+      if (currentUserId) localStorage.setItem(PASSKEY_DEVICE_KEY, currentUserId);
+      notify("이 기기에 지문·Face ID를 등록했어요.");
       setRegisterReq(null);
+      setMoreOpen(false);
       api.members().then(setRoster);
     } catch (error) {
       notify(passkeyErrorMessage(error));
@@ -423,7 +429,7 @@ export default function Home() {
         <button className={activeTab === "race" ? "active" : ""} onClick={() => setActiveTab("race")}><Trophy size={19} /><span>레이스</span></button>
         <button className={activeTab === "routine" ? "active" : ""} onClick={() => setActiveTab("routine")}><CalendarDays size={19} /><span>루틴</span></button>
         <button className={activeTab === "record" ? "active" : ""} onClick={() => setActiveTab("record")}><Medal size={19} /><span>기록</span></button>
-        <button onClick={() => (getToken() ? setPinChange({ forced: false }) : notify("먼저 로그인해 주세요."))}><MoreHorizontal size={19} /><span>더보기</span></button>
+        <button onClick={() => (getToken() ? setMoreOpen(true) : notify("먼저 로그인해 주세요."))}><MoreHorizontal size={19} /><span>더보기</span></button>
       </nav>
 
       {toast && <div className="toast-message"><Sparkles size={15} />{toast}</div>}
@@ -441,6 +447,18 @@ export default function Home() {
         <div className="onboarding-top"><div className="pixel-portal"><span>🐢</span></div><span className="onboarding-step">{authStage === "name" ? "01 / 02" : "02 / 02"}</span></div>
         {authStage === "name" ? <><span className="section-kicker">WELCOME TO TURTLE QUEST</span><h2>나의 거북이를<br /><span>선택해 주세요.</span></h2><p className="onboarding-copy">이름을 선택하면 오늘의 기록을<br />안전하게 이어갈 수 있어요.</p><div className="name-grid">{roster.map((member) => <button key={member.id} className={authName === member.name ? "selected" : ""} onClick={() => { setAuthName(member.name); setPinError(""); }}><span style={{ background: colorsFor(member.sort_order)[0] }}>{member.name.slice(1)}</span>{member.name}{authName === member.name && <Check size={14} />}</button>)}</div><button className="primary-button onboarding-cta" onClick={chooseName} disabled={!roster.length}>다음으로 <ArrowRight size={17} /></button>{currentUserId && <button className="text-button" onClick={logout}>로그아웃</button>}</> : <><span className="section-kicker">PRIVATE CHECKPOINT</span><h2>{authName}님, <span>PIN을 입력해요.</span></h2><p className="onboarding-copy">소그룹에서 전달받은 4자리 PIN으로<br />나의 루틴 기록을 보호해요.</p><div className="pin-dots">{[0, 1, 2, 3].map((index) => <i key={index} className={pin.length > index ? "filled" : ""} />)}</div><div className="pin-pad">{[1, 2, 3, 4, 5, 6, 7, 8, 9].map((number) => <button key={number} onClick={() => pin.length < 4 && setPin((previous) => previous + number)}>{number}</button>)}<button className="pad-action" onClick={() => setPin("")}><RotateCcw size={16} /></button><button onClick={() => pin.length < 4 && setPin((previous) => previous + "0")}>0</button><button className="pad-action" onClick={() => setPin((previous) => previous.slice(0, -1))}>⌫</button></div>{pinError && <p className="pin-error">{pinError}</p>}<button className="primary-button onboarding-cta" onClick={submitPin} disabled={pin.length !== 4 || busy}>PIN 인증하기 <LockKeyhole size={16} /></button><button className="text-button" onClick={() => setAuthStage("name")}>← 이름 다시 선택</button></>}
         <p className="secure-note"><ShieldCheck size={13} /> 기록은 안전하게 암호화되어 저장돼요.</p>
+      </div></div>}
+
+      {moreOpen && <div className="modal-backdrop" onClick={() => setMoreOpen(false)}><div className="passkey-card" onClick={(event) => event.stopPropagation()}>
+        <div className="passkey-icon"><ShieldCheck size={25} /></div>
+        <span className="section-kicker">MY SETTINGS</span>
+        <h2>{currentMember.name}님, <span>무엇을 할까요?</span></h2>
+        <div className="passkey-actions" style={{ flexDirection: "column" }}>
+          <button className="primary-button" onClick={() => { setMoreOpen(false); setPinChange({ forced: false }); }}>PIN 바꾸기</button>
+          {passkeySupported() && <button className="secondary-button" onClick={() => finishAuth(true)} disabled={!registerReq}>이 기기에 지문·Face ID 등록</button>}
+          <button className="text-button" onClick={() => setMoreOpen(false)}>닫기</button>
+        </div>
+        <p className="secure-note"><ShieldCheck size={13} /> 폰·태블릿마다 따로 등록할 수 있어요.</p>
       </div></div>}
 
       {pinChange && <PinChangeCard forced={pinChange.forced} onClose={closePinChange} onDone={(message) => { notify(message); closePinChange(); }} />}

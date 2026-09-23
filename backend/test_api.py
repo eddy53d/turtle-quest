@@ -84,6 +84,17 @@ def test_flow(monkeypatch):
         assert cl.post("/api/auth/login-pin", json={"name": "양시윤", "pin": "8274"}).json()["user"]["must_change_pin"] is False
         assert "must_change_pin" not in cl.get("/api/members").json()[0]  # 목록에는 노출 금지
 
+        # 패스키: 기기 여러 개가 한 사람에게 붙고, 로그인 옵션에 모두 실린다
+        assert cl.post("/api/auth/webauthn/verify-options", json={"name": "홍승원"}).status_code == 404
         o = cl.post("/api/auth/webauthn/register-options", headers=h).json()
         assert o["options"]["rp"]["id"] == "localhost" and o["challenge_token"]
-        assert cl.post("/api/auth/webauthn/verify-options", json={"name": "홍승원"}).status_code == 404
+        with psycopg.connect(pg.get_uri(), autocommit=True) as db:
+            for cred in ("cGhvbmU", "dGFibGV0"):  # base64url("phone"), ("tablet")
+                db.execute("insert into passkeys (credential_id, user_id, public_key) values (%s, %s, %s)",
+                           (cred, me, b"fake"))
+        allowed = {c["id"] for c in cl.post("/api/auth/webauthn/verify-options", json={"name": "홍승원"}).json()["options"]["allowCredentials"]}
+        assert allowed == {"cGhvbmU", "dGFibGV0"}
+        assert cl.get("/api/me", headers=h).json()["has_passkey"] is True
+        # 이미 등록한 기기는 재등록 목록에서 제외
+        o2 = cl.post("/api/auth/webauthn/register-options", headers=h).json()
+        assert {c["id"] for c in o2["options"]["excludeCredentials"]} == {"cGhvbmU", "dGFibGV0"}
