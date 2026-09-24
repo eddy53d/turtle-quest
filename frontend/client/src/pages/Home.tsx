@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import AdminPanel from "@/components/AdminPanel";
 import { api, ApiError, fetchLoginOptions, fetchRegisterOptions, getToken, isInAppBrowser, loginPasskey, passkeyErrorMessage, passkeySupported, registerPasskey, setToken, type ApiUser, type BoardRow, type CalendarDay, type Poke, type PasskeyRequest } from "@/lib/api";
 import {
   ArrowRight,
@@ -133,6 +134,8 @@ export default function Home() {
   const [registerReq, setRegisterReq] = useState<PasskeyRequest | null>(null);
   const [loginReq, setLoginReq] = useState<PasskeyRequest | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
@@ -190,7 +193,7 @@ export default function Home() {
   // 로그인 상태면 내 정보 + 보드 로드, 30초마다 갱신(다른 멤버 인증/응원 반영)
   useEffect(() => {
     if (showOnboarding || !getToken()) return;
-    api.me().then((user) => setCurrentUserId(user.id)).catch(handleError);
+    api.me().then((user) => { setCurrentUserId(user.id); setIsAdmin(!!user.is_admin); }).catch(handleError);
     refresh();
     const timer = window.setInterval(refresh, 30_000);
     return () => window.clearInterval(timer);
@@ -251,6 +254,7 @@ export default function Home() {
     setToken(session.token);
     localStorage.setItem("turtleQuestUser", session.user.name);
     setCurrentUserId(session.user.id);
+    setIsAdmin(!!session.user.is_admin);
     setPin("");
     setPinError("");
     setShowOnboarding(false);
@@ -456,10 +460,13 @@ export default function Home() {
         <div className="passkey-actions" style={{ flexDirection: "column" }}>
           <button className="primary-button" onClick={() => { setMoreOpen(false); setPinChange({ forced: false }); }}>PIN 바꾸기</button>
           {passkeySupported() && <button className="secondary-button" onClick={() => finishAuth(true)} disabled={!registerReq}>이 기기에 지문·Face ID 등록</button>}
+          {isAdmin && <button className="secondary-button" onClick={() => { setMoreOpen(false); setAdminOpen(true); }}>관리자 · 인증 관리</button>}
           <button className="text-button" onClick={() => setMoreOpen(false)}>닫기</button>
         </div>
         <p className="secure-note"><ShieldCheck size={13} /> 폰·태블릿마다 따로 등록할 수 있어요.</p>
       </div></div>}
+
+      {adminOpen && <AdminPanel notify={notify} onClose={() => { setAdminOpen(false); refresh(); }} />}
 
       {pinChange && <PinChangeCard forced={pinChange.forced} onClose={closePinChange} onDone={(message) => { notify(message); closePinChange(); }} />}
 

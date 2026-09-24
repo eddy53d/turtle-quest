@@ -7,6 +7,7 @@ import json
 import os
 import time
 from datetime import date, datetime, timedelta
+from datetime import time as clock_time  # stdlib time 모듈과 이름이 겹치지 않게
 from contextlib import asynccontextmanager
 from typing import Literal
 from uuid import UUID
@@ -31,6 +32,7 @@ KST = ZoneInfo("Asia/Seoul")
 JWT_SECRET = os.environ["JWT_SECRET"]  # 필수: 32자 이상 랜덤 문자열
 RP_ID = os.environ.get("RP_ID", "localhost")
 ORIGINS = [o.strip() for o in os.environ.get("ORIGINS", "http://localhost:3000").split(",") if o.strip()]
+ADMIN_NAMES = {n.strip() for n in os.environ.get("ADMIN_NAMES", "홍승원").split(",") if n.strip()}
 DEFAULT_PIN = os.environ.get("DEFAULT_PIN", "0412")  # 공통 초기 PIN — 로그인하면 변경을 요구
 BASE_STEP, SPURT_STEP = 5, 10  # 첫 인증 +5m, 같은 날 두 번째 인증 +10m(보너스 5m 포함) — shared/quest.ts와 동일
 
@@ -116,7 +118,8 @@ def load_user(uid) -> dict:
 
 
 def user_public(u: dict) -> dict:
-    out = {"id": str(u["id"]), "name": u["name"], "sort_order": u["sort_order"], "has_passkey": bool(u.get("has_passkey"))}
+    out = {"id": str(u["id"]), "name": u["name"], "sort_order": u["sort_order"],
+           "has_passkey": bool(u.get("has_passkey")), "is_admin": u["name"] in ADMIN_NAMES}
     # 공개 목록에는 넣지 않음 — 누가 아직 공통 PIN을 쓰는지 드러나면 안 됨
     if "pin_code" in u:
         out["must_change_pin"] = u["pin_code"] == DEFAULT_PIN
@@ -361,3 +364,100 @@ def my_pokes(uid: str = Depends(current_user)):
     rows = q("select p.id, u.name from_name, p.created_at from pokes p join users u on u.id = p.from_user "
              "where p.to_user = %s and p.created_at > now() - interval '24 hours' order by p.created_at desc", uid)
     return [{"id": r["id"], "from_name": r["from_name"], "created_at": r["created_at"].isoformat()} for r in rows]
+
+
+# ── 관리자 (기본: 홍승원, 환경변수 ADMIN_NAMES로 변경) ───────────────────────
+def current_admin(uid: str = Depends(current_user)) -> dict:
+    u = load_user(uid)
+    if u["name"] not in ADMIN_NAMES:
+        raise HTTPException(403, "관리자만 쓸 수 있어요.")
+    return u
+
+
+def recompute(user_id) -> dict:
+    """손으로 고친 기록으로 거리·연속일수를 다시 계산한다.
+    하루 1개 5m, 2개면 보너스 포함 15m. 연속일수는 큐티+운동 둘 다 한 날만 센다."""
+    return q("""
+        with per_day as (
+          select kst_date, count(*) n, max(created_at) at_ from activities where user_id = %s group by kst_date
+        ),
+        dist as (select sum(case when n >= 2 then 15 else 5 end) total, max(at_) last_at from per_day),
+        full_days as (
+          select kst_date, kst_date - (row_number() over (order by kst_date))::int * interval '1 day' grp
+          from per_day where n >= 2
+        ),
+        runs as (
+          select max(kst_date) last_day, count(*) len, row_number() over (order by max(kst_date) desc) rn
+          from full_days group by grp
+        )
+        update race_stats s set
+          total_distance = coalesce((select total from dist), 0),
+          current_streak = coalesce((select len from runs where rn = 1), 0),
+          last_streak_date = (select last_day from runs where rn = 1),
+          last_update = coalesce((select last_at from dist), now())
+        where s.user_id = %s returning *""", user_id, user_id, one=True)
+
+
+def admin_rows(day: date) -> list[dict]:
+    rows = q("""
+        select u.id, u.name, s.total_distance, s.current_streak, s.last_streak_date,
+               coalesce(bool_or(a.type = 'qt'), false) qt,
+               coalesce(bool_or(a.type = 'exercise'), false) exercise,
+               (select count(*) from passkeys p where p.user_id = u.id) devices,
+               u.pin_code = %s as default_pin
+        from users u join race_stats s on s.user_id = u.id
+        left join activities a on a.user_id = u.id and a.kst_date = %s
+        group by u.id, s.user_id order by u.sort_order, u.name""", DEFAULT_PIN, day)
+    today = today_kst()
+    return [{"id": str(r["id"]), "name": r["name"], "total_distance": r["total_distance"],
+             "streak": effective_streak(r["current_streak"], r["last_streak_date"], today),
+             "qt": r["qt"], "exercise": r["exercise"], "devices": r["devices"],
+             "default_pin": r["default_pin"]} for r in rows]
+
+
+@app.get("/api/admin/day")
+def admin_day(day: str | None = None, _: dict = Depends(current_admin)):
+    """특정 날짜(기본 오늘)의 14명 인증 현황."""
+    d = datetime.strptime(day, "%Y-%m-%d").date() if day else today_kst()
+    return {"date": d.isoformat(), "members": admin_rows(d)}
+
+
+class AdminActivity(BaseModel):
+    user_id: UUID
+    day: date
+    type: Literal["qt", "exercise"]
+    done: bool
+
+
+@app.post("/api/admin/activity")
+def admin_set_activity(body: AdminActivity, _: dict = Depends(current_admin)):
+    """인증을 대신 체크하거나 취소한다."""
+    if body.day > today_kst():
+        raise HTTPException(400, "아직 오지 않은 날짜예요.")
+    if body.done:
+        q("insert into activities (user_id, type, kst_date, created_at) values (%s, %s, %s, %s) "
+          "on conflict (user_id, type, kst_date) do nothing",
+          body.user_id, body.type, body.day, datetime.combine(body.day, clock_time(21, 0), KST))
+    else:
+        q("delete from activities where user_id = %s and type = %s and kst_date = %s",
+          body.user_id, body.type, body.day)
+    recompute(body.user_id)
+    return {"date": body.day.isoformat(), "members": admin_rows(body.day)}
+
+
+class AdminTarget(BaseModel):
+    user_id: UUID
+
+
+@app.post("/api/admin/reset-pin")
+def admin_reset_pin(body: AdminTarget, _: dict = Depends(current_admin)):
+    """PIN을 잊은 멤버를 공통 PIN으로 되돌린다. 다음 로그인 때 변경을 요구받는다."""
+    q("update users set pin_code = %s where id = %s", DEFAULT_PIN, body.user_id)
+    return {"ok": True, "pin": DEFAULT_PIN}
+
+
+@app.post("/api/admin/reset-passkeys")
+def admin_reset_passkeys(body: AdminTarget, _: dict = Depends(current_admin)):
+    """기기를 잃어버렸을 때 등록된 지문·Face ID를 모두 해제한다."""
+    q("delete from passkeys where user_id = %s", body.user_id)
+    return {"ok": True}

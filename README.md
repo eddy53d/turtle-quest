@@ -16,6 +16,7 @@ SQL Editor에 `backend/schema.sql` 전체 붙여넣고 실행 → 마지막 결�
   - `JWT_SECRET` 32자 이상 랜덤 (`python -c "import secrets;print(secrets.token_urlsafe(48))"`)
   - `RP_ID` 프론트 도메인만 (예: `turtle-quest.vercel.app`) — 패스키가 이 도메인에 묶임
   - `ORIGINS` 프론트 origin, 쉼표 구분 (예: `https://turtle-quest.vercel.app`)
+  - `ADMIN_NAMES` (선택) 관리자 이름, 쉼표 구분. 기본값 `홍승원`
   - `DEFAULT_PIN` (선택) 공통 초기 PIN, 기본값 `0412`. 이 PIN으로 로그인하면 앱이 변경 화면을 띄움
 
 ## 3. 프론트 (Vercel)
@@ -34,6 +35,9 @@ SQL Editor에 `backend/schema.sql` 전체 붙여넣고 실행 → 마지막 결�
 | `GET /api/activity/{user_id}/calendar?month=YYYY-MM` | 잔디 |
 | `GET /api/race/leaderboard` | 거리순(동점은 먼저 도달한 사람) + 오늘 상태/스트릭/소감/응원 수 |
 | `GET /api/race/global-distance` | 14명 합계 |
+| `GET /api/admin/day?day=YYYY-MM-DD` | (관리자) 그 날짜의 14명 인증 현황 |
+| `POST /api/admin/activity` | (관리자) `{user_id, day, type, done}` 대신 인증/취소 후 거리·연속일수 재계산 |
+| `POST /api/admin/reset-pin` / `reset-passkeys` | (관리자) PIN을 공통 PIN으로, 등록 기기 전체 해제 |
 | `POST /api/social/poke` / `GET /api/social/pokes` | 응원 보내기 / 최근 24시간 받은 응원 (프론트 30초 폴링) |
 
 스트릭: KST 기준 큐티+운동 둘 다 한 날이 연속된 일수. 자정 크론 없이 조회 시점에 계산 (어제·오늘 완주 없으면 0).

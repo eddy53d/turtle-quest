@@ -2,7 +2,12 @@
 const BASE = (import.meta.env.VITE_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
 const TOKEN_KEY = "turtleQuestToken";
 
-export type ApiUser = { id: string; name: string; sort_order: number; has_passkey: boolean; must_change_pin?: boolean };
+export type ApiUser = { id: string; name: string; sort_order: number; has_passkey: boolean; must_change_pin?: boolean; is_admin?: boolean };
+export type AdminRow = {
+  id: string; name: string; total_distance: number; streak: number;
+  qt: boolean; exercise: boolean; devices: number; default_pin: boolean;
+};
+export type AdminDay = { date: string; members: AdminRow[] };
 export type BoardRow = {
   rank: number; id: string; name: string; sort_order: number; total_distance: number; streak: number;
   today: { qt: boolean; exercise: boolean }; memo: string; cheers: number;
@@ -44,6 +49,11 @@ export const api = {
   changePin: (current_pin: string, new_pin: string) => call("/api/auth/change-pin", { body: { current_pin, new_pin } }),
   saveMemo: (memo: string) => call("/api/activity/memo", { method: "PUT", body: { memo } }),
   calendar: (userId: string, month: string) => call<CalendarDay[]>(`/api/activity/${userId}/calendar?month=${month}`),
+  adminDay: (day: string) => call<AdminDay>(`/api/admin/day?day=${day}`),
+  adminSetActivity: (user_id: string, day: string, type: "qt" | "exercise", done: boolean) =>
+    call<AdminDay>("/api/admin/activity", { body: { user_id, day, type, done } }),
+  adminResetPin: (user_id: string) => call<{ pin: string }>("/api/admin/reset-pin", { body: { user_id } }),
+  adminResetPasskeys: (user_id: string) => call("/api/admin/reset-passkeys", { body: { user_id } }),
   poke: (toUserId: string) => call("/api/social/poke", { body: { to_user_id: toUserId } }),
   pokes: () => call<Poke[]>("/api/social/pokes"),
 };
