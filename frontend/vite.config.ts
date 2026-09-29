@@ -1,10 +1,8 @@
-import { jsxLocPlugin } from "@builder.io/vite-plugin-jsx-loc";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type Plugin, type ViteDevServer } from "vite";
-import { vitePluginManusRuntime } from "vite-plugin-manus-runtime";
 
 // =============================================================================
 // Manus Debug Collector - Vite Plugin
@@ -150,7 +148,9 @@ function vitePluginManusDebugCollector(): Plugin {
   };
 }
 
-const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector()];
+// Manus 런타임/디버그 수집기는 개발 도구인데 프로덕션 HTML에 367KB 인라인 스크립트로 들어가
+// 첫 화면을 가로막았다. 개발 중에만 붙인다.
+const plugins = [react(), tailwindcss(), ...(process.env.NODE_ENV === "production" ? [] : [vitePluginManusDebugCollector()])];
 
 export default defineConfig({
   plugins,

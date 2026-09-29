@@ -136,6 +136,14 @@ class PinLogin(BaseModel):
     pin: str = Field(pattern=r"^\d{4}$")
 
 
+@app.get("/api/health")
+def health():
+    """외부 크론이 10분마다 호출해 Render 무료 플랜이 잠들지 않게 한다(콜드 스타트 30~60초 방지).
+    DB까지 한 번 찔러서 커넥션 풀도 같이 깨워둔다."""
+    q("select 1")
+    return {"ok": True}
+
+
 @app.get("/api/members")
 def members():
     """로그인 전 이름 선택 화면용 (자주 인증하는 6명이 위)."""

@@ -35,6 +35,7 @@ SQL Editor에 `backend/schema.sql` 전체 붙여넣고 실행 → 마지막 결�
 | `GET /api/activity/{user_id}/calendar?month=YYYY-MM` | 잔디 |
 | `GET /api/race/leaderboard` | 거리순(동점은 먼저 도달한 사람) + 오늘 상태/스트릭/소감/응원 수 |
 | `GET /api/race/global-distance` | 14명 합계 |
+| `GET /api/health` | 깨우기용. `.github/workflows/keepalive.yml`이 10분마다 호출 |
 | `GET /api/admin/day?day=YYYY-MM-DD` | (관리자) 그 날짜의 14명 인증 현황 |
 | `POST /api/admin/activity` | (관리자) `{user_id, day, type, done}` 대신 인증/취소 후 거리·연속일수 재계산 |
 | `POST /api/admin/reset-pin` / `reset-passkeys` | (관리자) PIN을 공통 PIN으로, 등록 기기 전체 해제 |
@@ -46,3 +47,23 @@ SQL Editor에 `backend/schema.sql` 전체 붙여넣고 실행 → 마지막 결�
 ```
 cd backend && pip install -r requirements.txt pytest pgserver httpx && pytest -q
 ```
+
+## 속도 관련 메모
+- Render 무료 플랜은 15분 idle이면 잠들고 다시 깨는 데 30~60초. 10분마다 `GET /api/health`를 호출해 막는다.
+  - 현재: cron-job.org 등 외부 모니터에 `https://turtle-quest-api.onrender.com/api/health`를 5~10분 간격으로 등록.
+  - 대안: 아래 GitHub Actions 워크플로를 `.github/workflows/keepalive.yml`로 추가. 단 푸시하는 토큰에 `workflow` 스코프가 필요하고,
+    저장소가 60일 비활성이면 GitHub이 스케줄을 중지시킨다.
+    ```yaml
+    name: keepalive
+    on:
+      schedule:
+        - cron: "*/10 * * * *"
+      workflow_dispatch:
+    jobs:
+      ping:
+        runs-on: ubuntu-latest
+        steps:
+          - run: curl -sS --max-time 90 --retry 3 --retry-delay 20 https://turtle-quest-api.onrender.com/api/health
+    ```
+- Manus 개발용 런타임(367KB 인라인 스크립트)은 프로덕션 빌드에서 제외한다. 다시 넣으면 첫 화면이 그만큼 늦어진다.
+- 프론트는 API를 tRPC가 아니라 `client/src/lib/api.ts`의 fetch로 호출한다. main.tsx에 tRPC/react-query를 되살리지 말 것.

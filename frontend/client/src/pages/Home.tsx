@@ -136,6 +136,7 @@ export default function Home() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [warming, setWarming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
@@ -187,7 +188,13 @@ export default function Home() {
   };
 
   useEffect(() => {
-    api.members().then(setRoster).catch(handleError);
+    // 잠든 서버는 깨는 데 30~60초 걸린다. 빈 화면 대신 상황을 알려준다.
+    const slow = window.setTimeout(() => setWarming(true), 2500);
+    api.members().then(setRoster).catch(handleError).finally(() => {
+      window.clearTimeout(slow);
+      setWarming(false);
+    });
+    return () => window.clearTimeout(slow);
   }, []);
 
   // 로그인 상태면 내 정보 + 보드 로드, 30초마다 갱신(다른 멤버 인증/응원 반영)
@@ -449,7 +456,7 @@ export default function Home() {
       {showOnboarding && <div className="onboarding-backdrop"><div className="onboarding-card">
         {currentUserId && <button className="modal-close" aria-label="닫기" onClick={() => { setShowOnboarding(false); setAuthStage("name"); setPin(""); setPinError(""); }}><X size={18} /></button>}
         <div className="onboarding-top"><div className="pixel-portal"><span>🐢</span></div><span className="onboarding-step">{authStage === "name" ? "01 / 02" : "02 / 02"}</span></div>
-        {authStage === "name" ? <><span className="section-kicker">WELCOME TO TURTLE QUEST</span><h2>나의 거북이를<br /><span>선택해 주세요.</span></h2><p className="onboarding-copy">이름을 선택하면 오늘의 기록을<br />안전하게 이어갈 수 있어요.</p><div className="name-grid">{roster.map((member) => <button key={member.id} className={authName === member.name ? "selected" : ""} onClick={() => { setAuthName(member.name); setPinError(""); }}><span style={{ background: colorsFor(member.sort_order)[0] }}>{member.name.slice(1)}</span>{member.name}{authName === member.name && <Check size={14} />}</button>)}</div><button className="primary-button onboarding-cta" onClick={chooseName} disabled={!roster.length}>다음으로 <ArrowRight size={17} /></button>{currentUserId && <button className="text-button" onClick={logout}>로그아웃</button>}</> : <><span className="section-kicker">PRIVATE CHECKPOINT</span><h2>{authName}님, <span>PIN을 입력해요.</span></h2><p className="onboarding-copy">소그룹에서 전달받은 4자리 PIN으로<br />나의 루틴 기록을 보호해요.</p><div className="pin-dots">{[0, 1, 2, 3].map((index) => <i key={index} className={pin.length > index ? "filled" : ""} />)}</div><div className="pin-pad">{[1, 2, 3, 4, 5, 6, 7, 8, 9].map((number) => <button key={number} onClick={() => pin.length < 4 && setPin((previous) => previous + number)}>{number}</button>)}<button className="pad-action" onClick={() => setPin("")}><RotateCcw size={16} /></button><button onClick={() => pin.length < 4 && setPin((previous) => previous + "0")}>0</button><button className="pad-action" onClick={() => setPin((previous) => previous.slice(0, -1))}>⌫</button></div>{pinError && <p className="pin-error">{pinError}</p>}<button className="primary-button onboarding-cta" onClick={submitPin} disabled={pin.length !== 4 || busy}>PIN 인증하기 <LockKeyhole size={16} /></button><button className="text-button" onClick={() => setAuthStage("name")}>← 이름 다시 선택</button></>}
+        {authStage === "name" ? <><span className="section-kicker">WELCOME TO TURTLE QUEST</span><h2>나의 거북이를<br /><span>선택해 주세요.</span></h2><p className="onboarding-copy">{warming ? <>서버를 깨우는 중이에요.<br />처음 한 번만 1분 정도 걸려요 ☕</> : <>이름을 선택하면 오늘의 기록을<br />안전하게 이어갈 수 있어요.</>}</p><div className="name-grid">{roster.map((member) => <button key={member.id} className={authName === member.name ? "selected" : ""} onClick={() => { setAuthName(member.name); setPinError(""); }}><span style={{ background: colorsFor(member.sort_order)[0] }}>{member.name.slice(1)}</span>{member.name}{authName === member.name && <Check size={14} />}</button>)}</div><button className="primary-button onboarding-cta" onClick={chooseName} disabled={!roster.length}>다음으로 <ArrowRight size={17} /></button>{currentUserId && <button className="text-button" onClick={logout}>로그아웃</button>}</> : <><span className="section-kicker">PRIVATE CHECKPOINT</span><h2>{authName}님, <span>PIN을 입력해요.</span></h2><p className="onboarding-copy">소그룹에서 전달받은 4자리 PIN으로<br />나의 루틴 기록을 보호해요.</p><div className="pin-dots">{[0, 1, 2, 3].map((index) => <i key={index} className={pin.length > index ? "filled" : ""} />)}</div><div className="pin-pad">{[1, 2, 3, 4, 5, 6, 7, 8, 9].map((number) => <button key={number} onClick={() => pin.length < 4 && setPin((previous) => previous + number)}>{number}</button>)}<button className="pad-action" onClick={() => setPin("")}><RotateCcw size={16} /></button><button onClick={() => pin.length < 4 && setPin((previous) => previous + "0")}>0</button><button className="pad-action" onClick={() => setPin((previous) => previous.slice(0, -1))}>⌫</button></div>{pinError && <p className="pin-error">{pinError}</p>}<button className="primary-button onboarding-cta" onClick={submitPin} disabled={pin.length !== 4 || busy}>PIN 인증하기 <LockKeyhole size={16} /></button><button className="text-button" onClick={() => setAuthStage("name")}>← 이름 다시 선택</button></>}
         <p className="secure-note"><ShieldCheck size={13} /> 기록은 안전하게 암호화되어 저장돼요.</p>
       </div></div>}
 

@@ -22,13 +22,28 @@ export class ApiError extends Error {
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const setToken = (token: string | null) => token ? localStorage.setItem(TOKEN_KEY, token) : localStorage.removeItem(TOKEN_KEY);
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function call<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
   const token = getToken();
-  const res = await fetch(`${BASE}${path}`, {
-    method: init.method ?? (init.body ? "POST" : "GET"),
+  const method = init.method ?? (init.body ? "POST" : "GET");
+  const request = {
+    method,
     headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: init.body ? JSON.stringify(init.body) : undefined,
-  });
+  };
+  // 잠들어 있던 서버가 깨는 동안엔 연결이 끊기거나 502가 온다. 조회 요청만 두 번 더 시도한다
+  // (POST를 재시도하면 인증이 두 번 들어갈 수 있으므로 제외).
+  let res: Response;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      res = await fetch(`${BASE}${path}`, request);
+      if (res.status < 502 || res.status > 504 || method !== "GET" || attempt >= 2) break;
+    } catch (networkError) {
+      if (method !== "GET" || attempt >= 2) throw networkError;
+    }
+    await sleep(2000 * (attempt + 1));
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const detail = typeof data.detail === "string" ? data.detail : "잠시 후 다시 시도해 주세요.";
