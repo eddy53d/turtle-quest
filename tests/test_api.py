@@ -1,5 +1,9 @@
-"""pip install pytest pgserver httpx && pytest -q  (임베디드 Postgres로 schema.sql + API 전체 흐름 검증)"""
+"""python3 -m pip install -r requirements.txt pytest pgserver httpx && pytest -q
+
+임베디드 Postgres에 db/schema.sql을 올리고 api/index.py의 API 흐름을 전부 돌려본다.
+"""
 import os
+import sys
 import tempfile
 from datetime import date, timedelta
 from pathlib import Path
@@ -7,16 +11,19 @@ from pathlib import Path
 import pgserver
 import psycopg
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "api"))  # api/index.py 를 import
+DB = Path(__file__).resolve().parents[1] / "db"
+
 pg = pgserver.get_server(tempfile.mkdtemp(), cleanup_mode="stop")
 os.environ["DATABASE_URL"] = pg.get_uri()
 os.environ["JWT_SECRET"] = "test-secret-" + "x" * 32
 with psycopg.connect(pg.get_uri(), autocommit=True) as c:
-    c.execute(Path(__file__).with_name("schema.sql").read_text())
+    c.execute((DB / "schema.sql").read_text())
     PINS = dict(c.execute("select name, pin_code from users").fetchall())
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-import main  # noqa: E402
+import index as main  # noqa: E402
 
 
 @pytest.fixture(scope="module")

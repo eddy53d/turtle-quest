@@ -1,6 +1,7 @@
-"""Turtle Quest API — FastAPI + Supabase(Postgres).
+"""Turtle Quest API — FastAPI + Supabase(Postgres), Vercel 서버리스 함수로 배포.
 
-env: DATABASE_URL, JWT_SECRET, RP_ID(프론트 도메인, 예: turtle-quest.vercel.app), ORIGINS(쉼표 구분 프론트 origin)
+프론트와 같은 도메인에서 /api/* 로 서빙된다(vercel.json의 rewrite).
+env: DATABASE_URL, JWT_SECRET, RP_ID(도메인만), ORIGINS(패스키 검증용 origin), ADMIN_NAMES, DEFAULT_PIN
 """
 import hmac
 import json
@@ -8,7 +9,6 @@ import os
 import time
 from datetime import date, datetime, timedelta
 from datetime import time as clock_time  # stdlib time 모듈과 이름이 겹치지 않게
-from contextlib import asynccontextmanager
 from typing import Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -63,20 +63,15 @@ def effective_streak(streak: int, last: date | None, today: date) -> int:
 
 # ── DB ───────────────────────────────────────────────────────────────────────
 # prepare_threshold=None: Supabase 트랜잭션 풀러(6543)는 prepared statement 미지원
+# Vercel 서버리스 함수는 ASGI lifespan을 실행하지 않으므로 import 시점에 연다.
+# 인스턴스가 여러 개 떠도 Supabase 트랜잭션 풀러가 받아내도록 인스턴스당 커넥션은 작게 잡는다.
 pool = ConnectionPool(
     os.environ.get("DATABASE_URL", ""),
     kwargs={"row_factory": dict_row, "prepare_threshold": None, "autocommit": True},
-    min_size=1, max_size=5, open=False,
+    min_size=0, max_size=2, open=True, timeout=15,
 )
 
-@asynccontextmanager
-async def lifespan(_):
-    pool.open()
-    yield
-    pool.close()
-
-
-app = FastAPI(title="Turtle Quest API", lifespan=lifespan)
+app = FastAPI(title="Turtle Quest API")
 app.add_middleware(CORSMiddleware, allow_origins=ORIGINS, allow_methods=["*"], allow_headers=["*"])
 
 

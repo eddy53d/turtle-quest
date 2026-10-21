@@ -1,5 +1,6 @@
-// FastAPI 백엔드 클라이언트. VITE_API_URL 예: https://turtle-quest-api.onrender.com
-const BASE = (import.meta.env.VITE_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
+// FastAPI 백엔드 클라이언트. 백엔드는 같은 도메인의 /api/* 로 서빙되므로 기본값은 상대 경로다.
+// (개발 중에는 vite가 /api 를 localhost:8000 으로 프록시한다. VITE_API_URL로 덮어쓸 수도 있다.)
+const BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 const TOKEN_KEY = "turtleQuestToken";
 
 export type ApiUser = { id: string; name: string; sort_order: number; has_passkey: boolean; must_change_pin?: boolean; is_admin?: boolean };

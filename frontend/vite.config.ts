@@ -170,6 +170,8 @@ export default defineConfig({
   },
   server: {
     host: true,
+    // 배포에서는 프론트와 API가 같은 도메인이다. 개발에서도 그렇게 보이도록 프록시한다.
+    proxy: { "/api": { target: process.env.API_URL ?? "http://localhost:8000", changeOrigin: true } },
     allowedHosts: [
       ".manuspre.computer",
       ".manus.computer",
