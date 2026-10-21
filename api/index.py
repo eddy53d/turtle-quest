@@ -34,26 +34,21 @@ RP_ID = os.environ.get("RP_ID", "localhost")
 ORIGINS = [o.strip() for o in os.environ.get("ORIGINS", "http://localhost:3000").split(",") if o.strip()]
 ADMIN_NAMES = {n.strip() for n in os.environ.get("ADMIN_NAMES", "홍승원").split(",") if n.strip()}
 DEFAULT_PIN = os.environ.get("DEFAULT_PIN", "0412")  # 공통 초기 PIN — 로그인하면 변경을 요구
-BASE_STEP, SPURT_STEP = 5, 10  # 첫 인증 +5m, 같은 날 두 번째 인증 +10m(보너스 5m 포함) — shared/quest.ts와 동일
+BASE_STEP, SPURT_STEP = 5, 10
+
+# 퀘스트 보상(m)과 조건. 보너스는 bonuses 테이블에 쌓이고 거리 재계산 때 합산된다.
+QUEST_MEMO, QUEST_CHEER = 2, 3          # 일일: 한 줄 소감 / 소그룹 응원
+QUEST_WEEK5, QUEST_FULL3 = 20, 15       # 주간: 5일 인증 / 완주 3일
+CATCHUP_BONUS = 5                       # 평균에 한참 못 미치면 인증한 날마다 추가
+CATCHUP_RATIO = 0.8                     # 소그룹 평균의 80% 미만이면 따라잡기 대상
+WEEK_GOAL_PER_PERSON = 5                # 협동 목표: 1인당 주 5회 인증  # 첫 인증 +5m, 같은 날 두 번째 인증 +10m(보너스 5m 포함) — shared/quest.ts와 동일
 
 # ── 날짜/스트릭 로직 (KST, 순수 함수) ────────────────────────────────────────
 # 자정 초기화는 크론 없이 처리: '오늘' 상태는 activities.kst_date로 매번 계산하고,
-# 끊긴 스트릭은 조회 시 effective_streak가 0으로 보여준다. 다음 완주 때 next_streak가 1로 재시작.
+# 거리·연속일수는 recompute()가 전체 기록에서 다시 센다. 끊긴 스트릭은 조회 시 effective_streak가 0으로 보여준다.
 
 def today_kst() -> date:
     return datetime.now(KST).date()
-
-
-def advance_for(done_today: int) -> int:
-    """오늘 몇 번째 인증인지(1 또는 2)로 전진 거리 결정."""
-    return SPURT_STEP if done_today >= 2 else BASE_STEP
-
-
-def next_streak(streak: int, last: date | None, today: date) -> int:
-    """오늘 두 개를 다 끝냈을 때의 새 스트릭."""
-    if last == today:
-        return streak
-    return streak + 1 if last == today - timedelta(days=1) else 1
 
 
 def effective_streak(streak: int, last: date | None, today: date) -> int:
@@ -75,9 +70,9 @@ app = FastAPI(title="Turtle Quest API")
 app.add_middleware(CORSMiddleware, allow_origins=ORIGINS, allow_methods=["*"], allow_headers=["*"])
 
 
-def q(sql: str, *args, one=False):
+def q(sql: str, *args, one=False, params=None):
     with pool.connection() as c:
-        cur = c.execute(sql, args)
+        cur = c.execute(sql, params if params is not None else args)
         rows = cur.fetchall() if cur.description else []
     return (rows[0] if rows else None) if one else rows
 
@@ -265,6 +260,71 @@ def webauthn_verify(body: VerifyBody):
     return {"token": make_token(u["id"]), "user": user_public(u)}
 
 
+def monday_of(day: date) -> date:
+    return day - timedelta(days=day.weekday())
+
+
+def quest_state(uid) -> dict:
+    """오늘/이번 주 퀘스트 진행 상황. 달성한 것은 bonuses에 적립(중복 적립 없음)."""
+    today, monday = today_kst(), monday_of(today_kst())
+    todays = q("select type, memo from activities where user_id = %s and kst_date = %s", uid, today)
+    cheers_today = q("select count(*) n from pokes where from_user = %s "
+                     "and (created_at at time zone 'Asia/Seoul')::date = %s", uid, today, one=True)["n"]
+    week = q("select kst_date, count(*) n from activities where user_id = %s and kst_date >= %s "
+             "group by kst_date", uid, monday)
+    group_week = q("select count(*) n from activities where kst_date >= %s", monday, one=True)["n"]
+    people = q("select count(*) n from users", one=True)["n"]
+
+    done_types = {a["type"] for a in todays}
+    quests = [
+        {"id": "qt", "title": "큐티 인증", "reward": BASE_STEP, "done": "qt" in done_types, "period": "daily"},
+        {"id": "exercise", "title": "운동 인증", "reward": BASE_STEP, "done": "exercise" in done_types, "period": "daily"},
+        {"id": "both", "title": "둘 다 완료 (스퍼트)", "reward": SPURT_STEP, "done": len(done_types) >= 2, "period": "daily"},
+        {"id": "quest_memo", "title": "한 줄 소감 남기기", "reward": QUEST_MEMO,
+         "done": any(a["memo"] for a in todays), "period": "daily"},
+        {"id": "quest_cheer", "title": "소그룹 친구 응원하기", "reward": QUEST_CHEER,
+         "done": cheers_today > 0, "period": "daily"},
+        {"id": "quest_week5", "title": "이번 주 5일 인증", "reward": QUEST_WEEK5,
+         "done": len(week) >= 5, "progress": f"{len(week)}/5", "period": "weekly"},
+        {"id": "quest_full3", "title": "이번 주 완주 3일", "reward": QUEST_FULL3,
+         "done": sum(1 for d in week if d["n"] >= 2) >= 3,
+         "progress": f"{sum(1 for d in week if d['n'] >= 2)}/3", "period": "weekly"},
+    ]
+    # 적립 대상은 추가 보상이 붙는 퀘스트뿐 (인증 자체는 이미 거리로 반영됨)
+    payouts = {"quest_memo": (QUEST_MEMO, today), "quest_cheer": (QUEST_CHEER, today),
+               "quest_week5": (QUEST_WEEK5, monday), "quest_full3": (QUEST_FULL3, monday)}
+    earned = []
+    for quest in quests:
+        if quest["done"] and quest["id"] in payouts:
+            meters, on = payouts[quest["id"]]
+            if q("insert into bonuses (user_id, kind, kst_date, meters) values (%s, %s, %s, %s) "
+                 "on conflict do nothing returning id", uid, quest["id"], on, meters, one=True):
+                earned.append(quest["title"])
+    return {"quests": quests, "earned": earned, "week_goal": {"done": group_week, "target": people * WEEK_GOAL_PER_PERSON}}
+
+
+def grant_catchup(uid) -> int:
+    """소그룹 평균에 한참 뒤처진 사람은 인증한 날마다 추가 거리를 받는다."""
+    row = q("select s.total_distance mine, (select avg(total_distance) from race_stats) avg_ "
+            "from race_stats s where s.user_id = %s", uid, one=True)
+    if not row or row["mine"] >= float(row["avg_"] or 0) * CATCHUP_RATIO:
+        return 0
+    got = q("insert into bonuses (user_id, kind, kst_date, meters) values (%s, 'catchup', %s, %s) "
+            "on conflict do nothing returning id", uid, today_kst(), CATCHUP_BONUS, one=True)
+    return CATCHUP_BONUS if got else 0
+
+
+@app.get("/api/quests")
+def quests(uid: str = Depends(current_user)):
+    state = quest_state(uid)
+    if state["earned"]:
+        recompute(uid)
+    row = q("select s.total_distance mine, (select avg(total_distance) from race_stats) avg_ "
+            "from race_stats s where s.user_id = %s", uid, one=True)
+    behind = row and row["mine"] < float(row["avg_"] or 0) * CATCHUP_RATIO
+    return {**state, "catchup": {"active": bool(behind), "bonus": CATCHUP_BONUS}}
+
+
 # ── 활동 ─────────────────────────────────────────────────────────────────────
 class CheckBody(BaseModel):
     type: Literal["qt", "exercise"]
@@ -274,26 +334,19 @@ class CheckBody(BaseModel):
 @app.post("/api/activity/check")
 def check(body: CheckBody, uid: str = Depends(current_user)):
     today = today_kst()
-    with pool.connection() as c, c.transaction():
-        # race_stats 행을 먼저 잠가서 큐티/운동 동시 인증에도 보너스 계산이 꼬이지 않게 함
-        s = c.execute("select * from race_stats where user_id = %s for update", (uid,)).fetchone()
-        inserted = c.execute(
-            "insert into activities (user_id, type, memo, kst_date) values (%s, %s, %s, %s) "
-            "on conflict do nothing returning id", (uid, body.type, body.memo or None, today)).fetchone()
-        if not inserted:
-            raise HTTPException(409, "오늘은 이미 인증했어요.")
-        done = c.execute("select type from activities where user_id = %s and kst_date = %s", (uid, today)).fetchall()
-        advance = advance_for(len(done))
-        streak, last = s["current_streak"], s["last_streak_date"]
-        if len(done) >= 2:
-            streak, last = next_streak(streak, last, today), today
-        s = c.execute(
-            "update race_stats set total_distance = total_distance + %s, current_streak = %s, "
-            "last_streak_date = %s, last_update = now() where user_id = %s returning *",
-            (advance, streak, last, uid)).fetchone()
+    before = q("select total_distance from race_stats where user_id = %s", uid, one=True)["total_distance"]
+    if not q("insert into activities (user_id, type, memo, kst_date) values (%s, %s, %s, %s) "
+             "on conflict do nothing returning id", uid, body.type, body.memo or None, today, one=True):
+        raise HTTPException(409, "오늘은 이미 인증했어요.")
+    # 인증 → 따라잡기·퀘스트 적립 → 거리 재계산(인증 + 보너스 합산) 순서
+    catchup = grant_catchup(uid)
+    earned = quest_state(uid)["earned"]
+    s = recompute(uid)
+    done = q("select type from activities where user_id = %s and kst_date = %s", uid, today)
     types = {d["type"] for d in done}
-    return {"advance": advance, "total_distance": s["total_distance"],
+    return {"advance": s["total_distance"] - before, "total_distance": s["total_distance"],
             "streak": effective_streak(s["current_streak"], s["last_streak_date"], today),
+            "catchup": catchup, "earned": earned,
             "today": {"qt": "qt" in types, "exercise": "exercise" in types}}
 
 
@@ -308,7 +361,10 @@ def save_memo(body: MemoBody, uid: str = Depends(current_user)):
             "and kst_date = %s order by created_at desc limit 1) returning id", body.memo or None, uid, today_kst(), one=True)
     if not row:
         raise HTTPException(400, "오늘 인증을 먼저 해 주세요.")
-    return {"ok": True}
+    earned = quest_state(uid)["earned"]
+    if earned:
+        recompute(uid)
+    return {"ok": True, "earned": earned}
 
 
 @app.get("/api/activity/{user_id}/calendar")
@@ -358,7 +414,10 @@ def poke(body: PokeBody, uid: str = Depends(current_user)):
     if not q("select 1 from users where id = %s", body.to_user_id, one=True):
         raise HTTPException(404, "없는 멤버예요.")
     q("insert into pokes (from_user, to_user) values (%s, %s)", uid, body.to_user_id)
-    return {"ok": True}
+    earned = quest_state(uid)["earned"]
+    if earned:
+        recompute(uid)
+    return {"ok": True, "earned": earned}
 
 
 @app.get("/api/social/pokes")
@@ -382,9 +441,10 @@ def recompute(user_id) -> dict:
     하루 1개 5m, 2개면 보너스 포함 15m. 연속일수는 큐티+운동 둘 다 한 날만 센다."""
     return q("""
         with per_day as (
-          select kst_date, count(*) n, max(created_at) at_ from activities where user_id = %s group by kst_date
+          select kst_date, count(*) n, max(created_at) at_ from activities where user_id = %(u)s group by kst_date
         ),
-        dist as (select sum(case when n >= 2 then 15 else 5 end) total, max(at_) last_at from per_day),
+        dist as (select sum(case when n >= 2 then %(both)s else %(one)s end) total, max(at_) last_at from per_day),
+        bonus as (select coalesce(sum(meters), 0) total from bonuses where user_id = %(u)s),
         full_days as (
           select kst_date, kst_date - (row_number() over (order by kst_date))::int * interval '1 day' grp
           from per_day where n >= 2
@@ -394,11 +454,12 @@ def recompute(user_id) -> dict:
           from full_days group by grp
         )
         update race_stats s set
-          total_distance = coalesce((select total from dist), 0),
+          total_distance = coalesce((select total from dist), 0) + (select total from bonus),
           current_streak = coalesce((select len from runs where rn = 1), 0),
           last_streak_date = (select last_day from runs where rn = 1),
           last_update = coalesce((select last_at from dist), now())
-        where s.user_id = %s returning *""", user_id, user_id, one=True)
+        where s.user_id = %(u)s returning *""", one=True,
+             params={"u": user_id, "one": BASE_STEP, "both": BASE_STEP + SPURT_STEP})
 
 
 def admin_rows(day: date) -> list[dict]:

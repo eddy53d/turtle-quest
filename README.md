@@ -13,6 +13,7 @@ vercel.json      빌드·라우팅 설정
 ## 1. DB (Supabase)
 - 처음이면 `db/schema.sql` 전체를 SQL Editor에 붙여넣고 실행 → 14명과 랜덤 PIN이 생성된다.
 - 기존 DB에 기기별 패스키를 추가하려면 `db/migrate_passkeys.sql`.
+- 퀘스트·따라잡기 보너스를 쓰려면 `db/migrate_quests.sql`.
 - 과거 인증을 채워넣는 예시는 `db/backfill_2026-09.sql`(날짜·이름만 바꿔 재사용).
 
 ## 2. 배포 (Vercel)
@@ -49,12 +50,19 @@ pytest -q                                        # 테스트 (pytest pgserver ht
 | `POST /api/activity/check` | `{type: qt\|exercise, memo?}` 첫 인증 +5m, 같은 날 두 번째 +10m(보너스 포함) |
 | `PUT /api/activity/memo` | 오늘 인증에 한 줄 소감 |
 | `GET /api/activity/{user_id}/calendar?month=YYYY-MM` | 잔디 |
+| `GET /api/quests` | 오늘·이번 주 퀘스트 진행도, 소그룹 주간 목표, 따라잡기 여부. 달성분은 호출 시 적립 |
 | `GET /api/race/leaderboard` | 거리순(동점은 먼저 도달한 사람) + 오늘 상태/스트릭/소감/응원 수 |
 | `GET /api/race/global-distance` | 14명 합계 |
 | `POST /api/social/poke` / `GET /api/social/pokes` | 응원 보내기 / 최근 24시간 받은 응원 (프론트 30초 폴링) |
 | `GET /api/admin/day?day=YYYY-MM-DD` | (관리자) 그 날짜의 14명 인증 현황 |
 | `POST /api/admin/activity` | (관리자) `{user_id, day, type, done}` 대신 인증/취소 후 거리·연속일수 재계산 |
 | `POST /api/admin/reset-pin` / `reset-passkeys` | (관리자) PIN을 공통 PIN으로, 등록 기기 전체 해제 |
+
+거리 계산: 하루 1개 인증 5m, 둘 다면 15m(스퍼트 보너스 포함). 여기에 `bonuses` 테이블의 퀘스트·따라잡기 보상을 더한다.
+`recompute()`가 인증 기록 + 보너스에서 매번 다시 계산하므로, 관리자가 과거 인증을 고쳐도 보상은 유지된다.
+
+퀘스트: 일일(소감 +2m, 응원 +3m)과 주간(5일 인증 +20m, 완주 3일 +15m). 같은 퀘스트는 하루/한 주에 한 번만 적립된다.
+따라잡기: 소그룹 평균의 80% 미만이면 인증한 날마다 +5m. 상수는 `api/index.py` 상단(QUEST_*, CATCHUP_*)에서 조정.
 
 스트릭: KST 기준 큐티+운동 둘 다 한 날이 연속된 일수. 자정 크론 없이 조회 시점에 계산 (어제·오늘 완주 없으면 0).
 

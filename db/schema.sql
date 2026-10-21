@@ -32,6 +32,18 @@ create table if not exists activities (
 );
 create index if not exists activities_date_idx on activities (kst_date);
 
+-- 퀘스트·따라잡기 보너스 (인증에서 계산되는 거리에 더해진다)
+create table if not exists bonuses (
+  id         bigint generated always as identity primary key,
+  user_id    uuid not null references users(id) on delete cascade,
+  kind       text not null,                       -- quest_memo | quest_cheer | quest_week5 | quest_full3 | catchup
+  kst_date   date not null,                       -- 일일은 그날, 주간은 그 주 월요일
+  meters     int  not null,
+  created_at timestamptz not null default now(),
+  unique (user_id, kind, kst_date)
+);
+create index if not exists bonuses_user_idx on bonuses (user_id);
+
 create table if not exists race_stats (
   user_id          uuid primary key references users(id) on delete cascade,
   total_distance   int  not null default 0,
@@ -51,6 +63,7 @@ create index if not exists pokes_to_idx on pokes (to_user, created_at desc);
 -- 백엔드만 DATABASE_URL(postgres 롤)로 접근. anon 키로는 못 읽게 RLS on + 정책 없음.
 alter table users      enable row level security;
 alter table passkeys   enable row level security;
+alter table bonuses    enable row level security;
 alter table activities enable row level security;
 alter table race_stats enable row level security;
 alter table pokes      enable row level security;

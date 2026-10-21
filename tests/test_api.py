@@ -5,7 +5,7 @@
 import os
 import sys
 import tempfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pgserver
@@ -35,13 +35,11 @@ def cl():
 
 def test_streak_rules():
     d = date(2026, 9, 22)
-    assert main.next_streak(0, None, d) == 1
-    assert main.next_streak(3, d - timedelta(1), d) == 4
-    assert main.next_streak(3, d - timedelta(2), d) == 1  # 하루 빠지면 리셋
-    assert main.next_streak(4, d, d) == 4
     assert main.effective_streak(4, d - timedelta(1), d) == 4  # 오늘 아직 안 했어도 유지
+    assert main.effective_streak(4, d, d) == 4
     assert main.effective_streak(4, d - timedelta(2), d) == 0  # 자정 지나 끊김
-    assert [main.advance_for(1), main.advance_for(2)] == [5, 10]
+    assert main.effective_streak(0, None, d) == 0
+    assert main.monday_of(date(2026, 9, 25)) == date(2026, 9, 21)  # 금요일 → 그 주 월요일
 
 
 def test_admin(monkeypatch, cl):
@@ -82,6 +80,62 @@ def test_admin(monkeypatch, cl):
     main.recompute(jiwoo["id"])
 
 
+def test_quests_and_catchup(monkeypatch, cl):
+    monkeypatch.setattr(main, "today_kst", lambda: date(2026, 10, 22))  # 목요일
+    h = {"Authorization": "Bearer " + cl.post(
+        "/api/auth/login-pin", json={"name": "박채원", "pin": PINS["박채원"]}).json()["token"]}
+    me = cl.get("/api/me", headers=h).json()["id"]
+
+    state = cl.get("/api/quests", headers=h).json()
+    assert [q["id"] for q in state["quests"]] == [
+        "qt", "exercise", "both", "quest_memo", "quest_cheer", "quest_week5", "quest_full3"]
+    assert all(not q["done"] for q in state["quests"])
+    assert state["week_goal"]["target"] == 14 * 5
+    assert state["catchup"]["active"] is False  # 아직 아무도 안 달렸으니 평균이 0
+
+    # 앞서가는 사람이 생겨 평균이 오르면 뒤처진 사람은 따라잡기 대상이 된다
+    with psycopg.connect(pg.get_uri(), autocommit=True) as db:
+        lead = db.execute("select id from users where name = '장승재'").fetchone()[0]
+        for d in range(1, 15):
+            for kind in ("qt", "exercise"):
+                db.execute("insert into activities (user_id, type, kst_date) values (%s, %s, %s)",
+                           (lead, kind, date(2026, 10, d)))
+    main.recompute(lead)
+    assert cl.get("/api/quests", headers=h).json()["catchup"]["active"] is True
+
+    r = cl.post("/api/activity/check", json={"type": "qt", "memo": "시편 1편"}, headers=h).json()
+    assert r["catchup"] == 5                      # 평균의 80% 미만이라 추가 지급
+    assert r["advance"] == 5 + 5 + 2              # 인증 + 따라잡기 + 소감 퀘스트
+    assert r["earned"] == ["한 줄 소감 남기기"]
+    assert cl.post("/api/activity/check", json={"type": "exercise"}, headers=h).json()["catchup"] == 0  # 하루 한 번
+
+    # 응원 퀘스트 (created_at 기준이라 그날 시각으로 직접 넣는다)
+    with psycopg.connect(pg.get_uri(), autocommit=True) as db:
+        friend = db.execute("select id from users where name = '유수아'").fetchone()[0]
+        db.execute("insert into pokes (from_user, to_user, created_at) values (%s, %s, %s)",
+                   (me, friend, datetime(2026, 10, 22, 21, 0, tzinfo=main.KST)))
+    assert "소그룹 친구 응원하기" in cl.get("/api/quests", headers=h).json()["earned"]
+
+    after = cl.get("/api/quests", headers=h).json()
+    assert [q["id"] for q in after["quests"] if q["done"]] == ["qt", "exercise", "both", "quest_memo", "quest_cheer"]
+    assert next(q for q in after["quests"] if q["id"] == "quest_week5")["progress"] == "1/5"
+
+    # 같은 주에 5일을 채우면 주간 퀘스트 20m
+    with psycopg.connect(pg.get_uri(), autocommit=True) as db:
+        for d in (19, 20, 21, 23):
+            db.execute("insert into activities (user_id, type, kst_date) values (%s, 'qt', %s)", (me, date(2026, 10, d)))
+    assert "이번 주 5일 인증" in cl.get("/api/quests", headers=h).json()["earned"]
+    mine = next(m for m in cl.get("/api/race/leaderboard", headers=h).json() if m["id"] == me)
+    assert mine["total_distance"] == 15 + 4 * 5 + 5 + 2 + 3 + 20  # 완주일+4일+따라잡기+소감+응원+주간
+
+    with psycopg.connect(pg.get_uri(), autocommit=True) as db:  # 다른 테스트를 위해 원상복구
+        db.execute("delete from pokes where from_user = %s", (me,))
+        db.execute("delete from activities where user_id in (%s, %s)", (me, lead))
+        db.execute("delete from bonuses where user_id in (%s, %s)", (me, lead))
+    main.recompute(me)
+    main.recompute(lead)
+
+
 def test_flow(monkeypatch, cl):
     names = [m["name"] for m in cl.get("/api/members").json()]
     assert names[:6] == ["홍승원", "강서진", "양시윤", "구준회", "조하은", "김유민"] and len(names) == 14
@@ -98,17 +152,19 @@ def test_flow(monkeypatch, cl):
     assert cl.post("/api/activity/check", json={"type": "qt"}, headers=h).json()["advance"] == 5
     assert cl.post("/api/activity/check", json={"type": "qt"}, headers=h).status_code == 409
     r = cl.post("/api/activity/check", json={"type": "exercise", "memo": "런닝 3km"}, headers=h).json()
-    assert (r["advance"], r["total_distance"], r["streak"]) == (10, 15, 1)
+    # 완주 10m + 한 줄 소감 퀘스트 2m
+    assert (r["advance"], r["total_distance"], r["streak"]) == (12, 17, 1)
+    assert r["earned"] == ["한 줄 소감 남기기"]
 
     day = date(2026, 9, 22)  # 다음날: 이어서 완주하면 2일
     cl.post("/api/activity/check", json={"type": "exercise"}, headers=h)
     r = cl.post("/api/activity/check", json={"type": "qt"}, headers=h).json()
-    assert (r["total_distance"], r["streak"], r["today"]) == (30, 2, {"qt": True, "exercise": True})
-    assert cl.put("/api/activity/memo", json={"memo": "시편 23편"}, headers=h).status_code == 200
+    assert (r["total_distance"], r["streak"], r["today"]) == (32, 2, {"qt": True, "exercise": True})
+    assert cl.put("/api/activity/memo", json={"memo": "시편 23편"}, headers=h).json()["earned"] == ["한 줄 소감 남기기"]
 
     board = cl.get("/api/race/leaderboard", headers=h).json()
     assert board[0]["name"] == "홍승원" and board[0]["memo"] == "시편 23편" and board[1]["name"] == "강서진"
-    assert cl.get("/api/race/global-distance").json() == {"total_distance": 30}
+    assert cl.get("/api/race/global-distance").json() == {"total_distance": 34}  # 소감 퀘스트 2m x 2일
 
     cal = cl.get(f"/api/activity/{me}/calendar?month=2026-09", headers=h).json()
     assert [c["date"] for c in cal] == ["2026-09-21", "2026-09-22"] and cal[0]["memo"] == "런닝 3km"
@@ -118,7 +174,9 @@ def test_flow(monkeypatch, cl):
 
     other = board[1]["id"]
     assert cl.post("/api/social/poke", json={"to_user_id": me}, headers=h).status_code == 400
-    assert cl.post("/api/social/poke", json={"to_user_id": other}, headers=h).status_code == 200
+    poked = cl.post("/api/social/poke", json={"to_user_id": other}, headers=h)
+    # 응원 퀘스트는 실제 시각 기준이라 today_kst를 과거로 바꾼 이 테스트에서는 달성되지 않는다
+    assert poked.status_code == 200 and poked.json()["earned"] == []
     t2 = cl.post("/api/auth/login-pin", json={"name": "강서진", "pin": PINS["강서진"]}).json()["token"]
     assert cl.get("/api/social/pokes", headers={"Authorization": f"Bearer {t2}"}).json()[0]["from_name"] == "홍승원"
 

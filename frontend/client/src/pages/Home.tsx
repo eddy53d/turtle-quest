@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import AdminPanel from "@/components/AdminPanel";
-import { api, ApiError, fetchLoginOptions, fetchRegisterOptions, getToken, isInAppBrowser, loginPasskey, passkeyErrorMessage, passkeySupported, registerPasskey, setToken, type ApiUser, type BoardRow, type CalendarDay, type Poke, type PasskeyRequest } from "@/lib/api";
+import { api, ApiError, fetchLoginOptions, fetchRegisterOptions, getToken, isInAppBrowser, loginPasskey, passkeyErrorMessage, passkeySupported, registerPasskey, setToken, type ApiUser, type BoardRow, type CalendarDay, type Poke, type PasskeyRequest, type QuestState } from "@/lib/api";
 import {
   ArrowRight,
   Bell,
@@ -8,6 +8,7 @@ import {
   CalendarDays,
   Check,
   ChevronRight,
+  Circle,
   Dumbbell,
   Flame,
   Heart,
@@ -15,7 +16,9 @@ import {
   Medal,
   MessageCircle,
   MoreHorizontal,
+  PartyPopper,
   Play,
+  Rocket,
   RotateCcw,
   Send,
   ShieldCheck,
@@ -26,7 +29,6 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { toast as sonnerToast } from "sonner";
 
 type HabitKind = "devotional" | "exercise";
 type ActiveTab = "race" | "routine" | "record";
@@ -49,6 +51,21 @@ type Member = {
 
 const GUIDE_IMAGE_URL = "/manus-storage/guide-otter_fa06dbfa.png";
 const SEEN_POKE_KEY = "turtleQuestSeenPoke";
+
+// 화면 아래쪽에서 사방으로 터지는 색종이. 렌더마다 새로 만들 필요가 없어 모듈 상수로 둔다.
+const FIREWORK_SPARKS: CSSProperties[] = Array.from({ length: 36 }, (_, index) => {
+  const angle = (index / 36) * Math.PI * 2 + Math.random();
+  const spread = 140 + Math.random() * 220;
+  return {
+    left: `${20 + Math.random() * 60}%`,
+    top: `${30 + Math.random() * 35}%`,
+    background: ["#f8d26a", "#71d7c3", "#ff9a8c", "#b7a3f5", "#84c7ef"][index % 5],
+    animationDelay: `${(index % 6) * 0.08}s`,
+    "--dx": `${Math.cos(angle) * spread}px`,
+    "--dy": `${Math.sin(angle) * spread + 120}px`,
+    "--spin": `${Math.round(Math.random() * 540 - 270)}deg`,
+  } as CSSProperties;
+});
 const PASSKEY_DEVICE_KEY = "turtleQuestPasskeyDevice";  // 이 기기에서 지문 등록을 마친 사용자 id
 
 // 멤버 순서(sort_order)별 거북이 등껍질/포인트 색
@@ -80,9 +97,9 @@ function getDateLabel() {
   return new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric", weekday: "short" }).format(new Date());
 }
 
-function Turtle({ member, moving = false, compact = false }: { member: Member; moving?: boolean; compact?: boolean }) {
+function Turtle({ member, moving = false, compact = false, dancing = false }: { member: Member; moving?: boolean; compact?: boolean; dancing?: boolean }) {
   return (
-    <div className={`turtle-wrap ${moving ? "is-moving" : ""} ${compact ? "is-compact" : ""}`} aria-label={`${member.name}의 거북이`}>
+    <div className={`turtle-wrap ${moving ? "is-moving" : ""} ${compact ? "is-compact" : ""} ${dancing ? "is-dancing" : ""}`} aria-label={`${member.name}의 거북이`}>
       <div className="turtle-dust" aria-hidden="true"><i /><i /><i /></div>
       <div
         className="turtle-pixel"
@@ -137,6 +154,8 @@ export default function Home() {
   const [adminOpen, setAdminOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [warming, setWarming] = useState(false);
+  const [cheerFrom, setCheerFrom] = useState("");  // 응원을 받으면 폭죽 + 거북이 춤
+  const [quests, setQuests] = useState<QuestState | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
@@ -151,9 +170,12 @@ export default function Home() {
   const sortedMembers = useMemo(() => [...members].sort((a, b) => a.rank - b.rank), [members]);
   const trackMax = Math.max(120, ...members.map((member) => member.distance));
 
-  const notify = (message: string) => {
-    setToast(message);
-    sonnerToast(message);
+  const notify = (message: string) => setToast(message);
+
+  /** 폭죽 + 내 거북이 춤 (5초). 응원을 받았을 때 */
+  const celebrate = (message: string) => {
+    setCheerFrom(message);
+    window.setTimeout(() => setCheerFrom(""), 5000);
   };
 
   const logout = () => {
@@ -173,14 +195,15 @@ export default function Home() {
   const refresh = async () => {
     if (!getToken()) return;
     try {
-      const [board, inbox] = await Promise.all([api.leaderboard(), api.pokes()]);
+      const [board, inbox, quest] = await Promise.all([api.leaderboard(), api.pokes(), api.quests()]);
       setMembers(board.map(toMember));
       setPokes(inbox);
+      setQuests(quest);
       const seen = Number(localStorage.getItem(SEEN_POKE_KEY) ?? 0);
       const fresh = inbox.filter((poke) => poke.id > seen);
       if (fresh.length) {
         localStorage.setItem(SEEN_POKE_KEY, String(fresh[0].id));
-        notify(`${fresh[0].from_name}님${fresh.length > 1 ? ` 외 ${fresh.length - 1}명` : ""}이 응원을 보냈어요! 💌`);
+        celebrate(`${fresh[0].from_name}님${fresh.length > 1 ? ` 외 ${fresh.length - 1}명` : ""}이 응원을 보냈어요!`);
       }
     } catch (error) {
       handleError(error);
@@ -252,7 +275,11 @@ export default function Home() {
     }
     run(async () => {
       const result = await api.check(kind === "devotional" ? "qt" : "exercise");
-      notify(result.advance > 5 ? `스퍼트 폭발! +${result.advance}m 전진했어요!` : `${kind === "devotional" ? "큐티" : "운동"} 인증 완료! +${result.advance}m 전진했어요.`);
+      const extras = [
+        result.catchup ? `따라잡기 +${result.catchup}m` : "",
+        ...result.earned.map((quest) => `${quest} 완료`),
+      ].filter(Boolean);
+      notify(`${kind === "devotional" ? "큐티" : "운동"} 인증 완료! +${result.advance}m 전진했어요.${extras.length ? ` (${extras.join(", ")})` : ""}`);
       await refresh();
     });
   };
@@ -406,7 +433,7 @@ export default function Home() {
                     <button className={`track-lane ${member.id === currentUserId ? "is-me" : ""}`} key={member.id} onClick={() => openMember(member)}>
                       <span className="lane-rank">{String(member.rank).padStart(2, "0")}</span>
                       <span className="lane-name">{member.name}</span>
-                      <span className="lane-road"><span className="lane-dashes" /><span className="finish-flag">▥</span><span className="turtle-position" style={{ left: `${position}%` }}><Turtle member={member} moving={member.id === currentUserId} compact /></span></span>
+                      <span className="lane-road"><span className="lane-dashes" /><span className="finish-flag">▥</span><span className="turtle-position" style={{ left: `${position}%` }}><Turtle member={member} moving={member.id === currentUserId} dancing={!!cheerFrom && member.id === currentUserId} compact /></span></span>
                       <span className="lane-distance">{member.distance}m</span>
                     </button>
                   );
@@ -429,6 +456,8 @@ export default function Home() {
             {currentMember.today.devotional && currentMember.today.exercise && <div className="spurt-banner"><Zap size={15} fill="currentColor" /><span><b>오늘의 스퍼트 달성!</b> 보너스 +5m가 포함됐어요.</span><Sparkles size={15} /></div>}
           </section>
 
+          {quests && <QuestBoard state={quests} />}
+
           <section className="quote-card"><div className="quote-mark">“</div><div><p>작은 습관이 모여<br /><b>함께 걷는 길</b>이 됩니다.</p><small>— 이번 주 다락방 미션</small></div><div className="quote-pixels">✦<br /><span>· ·</span></div></section>
         </>}
 
@@ -442,6 +471,13 @@ export default function Home() {
         <button className={activeTab === "record" ? "active" : ""} onClick={() => setActiveTab("record")}><Medal size={19} /><span>기록</span></button>
         <button onClick={() => (getToken() ? setMoreOpen(true) : notify("먼저 로그인해 주세요."))}><MoreHorizontal size={19} /><span>더보기</span></button>
       </nav>
+
+      {cheerFrom && <>
+        <div className="fireworks" aria-hidden="true">
+          {FIREWORK_SPARKS.map((spark, index) => <i key={index} style={spark} />)}
+        </div>
+        <div className="cheer-banner"><PartyPopper size={18} /> {cheerFrom}</div>
+      </>}
 
       {toast && <div className="toast-message"><Sparkles size={15} />{toast}</div>}
 
@@ -480,6 +516,39 @@ export default function Home() {
       {webauthnPending && <div className="modal-backdrop"><div className="passkey-card"><div className="passkey-icon"><ShieldCheck size={25} /></div><span className="section-kicker">ONE-TAP ACCESS</span><h2>다음부터 더 빠르게<br /><span>접속할까요?</span></h2><p>이 기기의 지문 또는 Face ID를<br />패스키로 연결할 수 있어요.</p>{isInAppBrowser() && <p className="pin-error">카카오톡 안에서는 연결되지 않아요.<br />오른쪽 아래 메뉴에서 Safari로 열어주세요.</p>}<div className="passkey-actions"><button className="secondary-button" onClick={() => finishAuth(false)}>나중에</button><button className="primary-button" onClick={() => finishAuth(true)} disabled={!registerReq}>연결하기 <ArrowRight size={16} /></button></div></div></div>}
     </div>
   );
+}
+
+function QuestBoard({ state }: { state: QuestState }) {
+  const daily = state.quests.filter((quest) => quest.period === "daily");
+  const weekly = state.quests.filter((quest) => quest.period === "weekly");
+  const goalPercent = Math.min(100, Math.round((state.week_goal.done / state.week_goal.target) * 100));
+
+  const row = (quest: typeof daily[number]) => (
+    <div className={`quest-row ${quest.done ? "is-done" : ""}`} key={quest.id}>
+      <span className="quest-check">{quest.done ? <Check size={13} /> : <Circle size={11} />}</span>
+      <span className="quest-title">{quest.title}{quest.progress && <em> {quest.progress}</em>}</span>
+      <span className="quest-reward">+{quest.reward}m</span>
+    </div>
+  );
+
+  return <section className="quest-panel">
+    <div className="verify-header">
+      <div><span className="section-kicker">QUEST BOARD</span><h2>퀘스트</h2></div>
+      {state.catchup.active && <div className="catchup-badge"><Rocket size={14} /> 따라잡기 +{state.catchup.bonus}m</div>}
+    </div>
+    {state.catchup.active && <p className="catchup-note">
+      소그룹 평균보다 뒤처져 있어요. 인증하는 날마다 <b>+{state.catchup.bonus}m</b>를 더 받아요. 금방 따라잡을 수 있어요!
+    </p>}
+    <div className="quest-grid">
+      <div className="quest-col"><h3>오늘</h3>{daily.map(row)}</div>
+      <div className="quest-col"><h3>이번 주</h3>{weekly.map(row)}
+        <div className="week-goal">
+          <div className="week-goal-head"><span>소그룹 목표</span><b>{state.week_goal.done} / {state.week_goal.target}회</b></div>
+          <div className="week-goal-bar"><i style={{ width: `${goalPercent}%` }} /></div>
+        </div>
+      </div>
+    </div>
+  </section>;
 }
 
 function RoutineView({ members, currentUserId, onOpen }: { members: Member[]; currentUserId: string | null; onOpen: (member: Member) => void }) {

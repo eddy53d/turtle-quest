@@ -13,6 +13,13 @@ export type BoardRow = {
   rank: number; id: string; name: string; sort_order: number; total_distance: number; streak: number;
   today: { qt: boolean; exercise: boolean }; memo: string; cheers: number;
 };
+export type Quest = { id: string; title: string; reward: number; done: boolean; progress?: string; period: "daily" | "weekly" };
+export type QuestState = {
+  quests: Quest[];
+  earned: string[];
+  week_goal: { done: number; target: number };
+  catchup: { active: boolean; bonus: number };
+};
 export type CalendarDay = { date: string; qt: boolean; exercise: boolean; memo: string | null };
 export type Poke = { id: number; from_name: string; created_at: string };
 
@@ -60,17 +67,19 @@ export const api = {
   me: () => call<ApiUser>("/api/me"),
   loginPin: (name: string, pin: string) => call<Session>("/api/auth/login-pin", { body: { name, pin } }),
   leaderboard: () => call<BoardRow[]>("/api/race/leaderboard"),
+  quests: () => call<QuestState>("/api/quests"),
   check: (type: "qt" | "exercise") =>
-    call<{ advance: number; total_distance: number; streak: number }>("/api/activity/check", { body: { type } }),
+    call<{ advance: number; total_distance: number; streak: number; catchup: number; earned: string[] }>(
+      "/api/activity/check", { body: { type } }),
   changePin: (current_pin: string, new_pin: string) => call("/api/auth/change-pin", { body: { current_pin, new_pin } }),
-  saveMemo: (memo: string) => call("/api/activity/memo", { method: "PUT", body: { memo } }),
+  saveMemo: (memo: string) => call<{ earned: string[] }>("/api/activity/memo", { method: "PUT", body: { memo } }),
   calendar: (userId: string, month: string) => call<CalendarDay[]>(`/api/activity/${userId}/calendar?month=${month}`),
   adminDay: (day: string) => call<AdminDay>(`/api/admin/day?day=${day}`),
   adminSetActivity: (user_id: string, day: string, type: "qt" | "exercise", done: boolean) =>
     call<AdminDay>("/api/admin/activity", { body: { user_id, day, type, done } }),
   adminResetPin: (user_id: string) => call<{ pin: string }>("/api/admin/reset-pin", { body: { user_id } }),
   adminResetPasskeys: (user_id: string) => call("/api/admin/reset-passkeys", { body: { user_id } }),
-  poke: (toUserId: string) => call("/api/social/poke", { body: { to_user_id: toUserId } }),
+  poke: (toUserId: string) => call<{ earned: string[] }>("/api/social/poke", { body: { to_user_id: toUserId } }),
   pokes: () => call<Poke[]>("/api/social/pokes"),
 };
 
