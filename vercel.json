@@ -1,8 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "regions": ["icn1"],
-  "installCommand": "cd frontend && npm install",
-  "buildCommand": "cd frontend && npx vite build",
+  "installCommand": "cd frontend && npx --yes pnpm@10.4.1 install --frozen-lockfile",
+  "buildCommand": "cd frontend && npx --yes pnpm@10.4.1 exec vite build",
   "outputDirectory": "frontend/dist/public",
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index" }
