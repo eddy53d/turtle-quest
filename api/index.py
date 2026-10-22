@@ -385,15 +385,19 @@ def leaderboard(_: str = Depends(current_user)):
         select u.id, u.name, u.sort_order, u.turtle_items, s.total_distance, s.current_streak, s.last_streak_date,
                coalesce(bool_or(a.type = 'qt'), false) qt, coalesce(bool_or(a.type = 'exercise'), false) exercise,
                string_agg(a.memo, ' / ') memo,
-               (select count(*) from pokes p where p.to_user = u.id) cheers
+               (select count(*) from pokes p where p.to_user = u.id) cheers,
+               exists(select 1 from pokes p where p.from_user = u.id
+                      and (p.created_at at time zone 'Asia/Seoul')::date = %(today)s) cheered
         from users u join race_stats s on s.user_id = u.id
-        left join activities a on a.user_id = u.id and a.kst_date = %s
+        left join activities a on a.user_id = u.id and a.kst_date = %(today)s
         group by u.id, s.user_id
-        order by s.total_distance desc, s.last_update asc, u.sort_order""", today)
+        order by s.total_distance desc, s.last_update asc, u.sort_order""", params={"today": today})
     return [{"rank": i + 1, "id": str(r["id"]), "name": r["name"], "sort_order": r["sort_order"],
              "turtle_items": r["turtle_items"], "total_distance": r["total_distance"],
              "streak": effective_streak(r["current_streak"], r["last_streak_date"], today),
-             "today": {"qt": r["qt"], "exercise": r["exercise"]}, "memo": r["memo"] or "", "cheers": r["cheers"]}
+             "today": {"qt": r["qt"], "exercise": r["exercise"]}, "memo": r["memo"] or "", "cheers": r["cheers"],
+             # 오늘 일일 퀘스트를 몇 개 끝냈는지 (프론트에서 불붙은 거북이 판단용)
+             "quests_done": sum([r["qt"], r["exercise"], bool(r["memo"]), r["cheered"]])}
             for i, r in enumerate(rows)]
 
 

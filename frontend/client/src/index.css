@@ -182,3 +182,19 @@ h1 span, .onboarding-card h2 span, .passkey-card h2 span { color: var(--mint-dar
 .week-goal-bar { height: 6px; margin-top: 7px; border-radius: 999px; background: #dfe8f6; overflow: hidden; }
 .week-goal-bar i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg,#84c7ef,#7ba5f4); transition: width .4s ease; }
 @media (max-width: 760px) { .quest-panel { margin-left: 6px; margin-right: 6px; padding: 17px 14px; } .quest-grid { grid-template-columns: 1fr; gap: 13px; } }
+
+/* 오늘 인증을 다 한 거북이는 전력질주, 일일 퀘스트를 전부 끝내면 귀여운 불이 붙는다 */
+.turtle-wrap.is-running .turtle-pixel { animation: turtle-sprint .26s steps(2, end) infinite; }
+.turtle-wrap.is-running.is-compact .turtle-pixel { animation: turtle-sprint-compact .26s steps(2, end) infinite; }
+.turtle-wrap.is-running .turtle-dust { opacity: 1; animation: dust-pop .4s steps(2, end) infinite; }
+@keyframes turtle-sprint { 0%,100% { transform: scale(1) rotate(-3deg) translateY(0); } 50% { transform: scale(1) rotate(-6deg) translateY(-4px); } }
+@keyframes turtle-sprint-compact { 0%,100% { transform: scale(.53) rotate(-4deg) translateY(0); } 50% { transform: scale(.53) rotate(-8deg) translateY(-5px); } }
+
+.turtle-flame { position: absolute; left: -10px; bottom: 9px; display: flex; align-items: flex-end; gap: 2px; pointer-events: none; }
+.turtle-wrap.is-compact .turtle-flame { left: -7px; bottom: 6px; transform: scale(.62); transform-origin: right bottom; }
+.turtle-flame i { width: 7px; height: 11px; border-radius: 60% 60% 45% 45%; background: linear-gradient(180deg, #ffd45e, #ff8a3d 55%, #f2653f); box-shadow: 0 0 7px rgba(255,150,70,.65); animation: flame-flicker .34s ease-in-out infinite; }
+.turtle-flame i:nth-child(1) { height: 8px; opacity: .75; animation-delay: .06s; }
+.turtle-flame i:nth-child(2) { height: 13px; }
+.turtle-flame i:nth-child(3) { height: 9px; opacity: .85; animation-delay: .17s; }
+@keyframes flame-flicker { 0%,100% { transform: scaleY(1) translateX(0); } 50% { transform: scaleY(1.28) translateX(-2px); } }
+.turtle-wrap.is-blazing .turtle-pixel { filter: drop-shadow(0 0 6px rgba(255,160,80,.55)); }

@@ -47,6 +47,7 @@ type Member = {
   today: Record<HabitKind, boolean>;
   feeling: string;
   cheerCount: number;
+  questsDone: number;   // 오늘 끝낸 일일 퀘스트 수 (0~4)
 };
 
 const GUIDE_IMAGE_URL = "/manus-storage/guide-otter_fa06dbfa.png";
@@ -82,13 +83,13 @@ const toMember = (row: BoardRow): Member => {
   return {
     id: row.id, name: row.name, initials: row.name.slice(1), shell, accent, order: row.sort_order, rank: row.rank,
     streak: row.streak, distance: row.total_distance, today: { devotional: row.today.qt, exercise: row.today.exercise },
-    feeling: row.memo, cheerCount: row.cheers,
+    feeling: row.memo, cheerCount: row.cheers, questsDone: row.quests_done,
   };
 };
 
 const EMPTY_MEMBER: Member = {
   id: "", name: "", initials: "", shell: PALETTE[0][0], accent: PALETTE[0][1], order: 0, rank: 0,
-  streak: 0, distance: 0, today: { devotional: false, exercise: false }, feeling: "", cheerCount: 0,
+  streak: 0, distance: 0, today: { devotional: false, exercise: false }, feeling: "", cheerCount: 0, questsDone: 0,
 };
 
 const isoDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -98,8 +99,15 @@ function getDateLabel() {
 }
 
 function Turtle({ member, moving = false, compact = false, dancing = false }: { member: Member; moving?: boolean; compact?: boolean; dancing?: boolean }) {
+  // 오늘 인증 두 개를 다 하면 전력질주, 일일 퀘스트를 전부 끝내면 불이 붙는다
+  const running = member.today.devotional && member.today.exercise;
+  const blazing = member.questsDone >= 4;
   return (
-    <div className={`turtle-wrap ${moving ? "is-moving" : ""} ${compact ? "is-compact" : ""} ${dancing ? "is-dancing" : ""}`} aria-label={`${member.name}의 거북이`}>
+    <div
+      className={`turtle-wrap ${moving ? "is-moving" : ""} ${compact ? "is-compact" : ""} ${dancing ? "is-dancing" : ""} ${running ? "is-running" : ""} ${blazing ? "is-blazing" : ""}`}
+      aria-label={`${member.name}의 거북이${blazing ? " (퀘스트 완료!)" : running ? " (오늘 완주)" : ""}`}
+    >
+      {blazing && <span className="turtle-flame" aria-hidden="true"><i /><i /><i /></span>}
       <div className="turtle-dust" aria-hidden="true"><i /><i /><i /></div>
       <div
         className="turtle-pixel"

@@ -11,7 +11,7 @@ export type AdminRow = {
 export type AdminDay = { date: string; members: AdminRow[] };
 export type BoardRow = {
   rank: number; id: string; name: string; sort_order: number; total_distance: number; streak: number;
-  today: { qt: boolean; exercise: boolean }; memo: string; cheers: number;
+  today: { qt: boolean; exercise: boolean }; memo: string; cheers: number; quests_done: number;
 };
 export type Quest = { id: string; title: string; reward: number; done: boolean; progress?: string; period: "daily" | "weekly" };
 export type QuestState = {

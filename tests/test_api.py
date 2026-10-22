@@ -167,6 +167,8 @@ def test_flow(monkeypatch, cl):
 
     board = cl.get("/api/race/leaderboard", headers=h).json()
     assert board[0]["name"] == "홍승원" and board[0]["memo"] == "시편 23편" and board[1]["name"] == "강서진"
+    # 큐티+운동+소감은 했고 오늘 응원은 아직 → 4개 중 3개
+    assert board[0]["quests_done"] == 3 and board[1]["quests_done"] == 0
     assert cl.get("/api/race/global-distance").json() == {"total_distance": 34}  # 소감 퀘스트 2m x 2일
 
     cal = cl.get(f"/api/activity/{me}/calendar?month=2026-09", headers=h).json()
