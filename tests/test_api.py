@@ -90,7 +90,7 @@ def test_quests_and_catchup(monkeypatch, cl):
     assert [q["id"] for q in state["quests"]] == [
         "qt", "exercise", "both", "quest_memo", "quest_cheer", "quest_week5", "quest_full3"]
     assert all(not q["done"] for q in state["quests"])
-    assert state["week_goal"]["target"] == 14 * 5
+    assert state["week_goal"]["target"] == main.WEEK_GOAL_TOTAL
     assert state["catchup"]["active"] is False  # 아직 아무도 안 달렸으니 평균이 0
 
     # 앞서가는 사람이 생겨 평균이 오르면 뒤처진 사람은 따라잡기 대상이 된다
@@ -104,8 +104,8 @@ def test_quests_and_catchup(monkeypatch, cl):
     assert cl.get("/api/quests", headers=h).json()["catchup"]["active"] is True
 
     r = cl.post("/api/activity/check", json={"type": "qt", "memo": "시편 1편"}, headers=h).json()
-    assert r["catchup"] == 5                      # 평균의 80% 미만이라 추가 지급
-    assert r["advance"] == 5 + 5 + 2              # 인증 + 따라잡기 + 소감 퀘스트
+    assert r["catchup"] == main.CATCHUP_BONUS      # 평균에 한참 못 미치면 추가 지급
+    assert r["advance"] == main.BASE_STEP + main.CATCHUP_BONUS + main.QUEST_MEMO
     assert r["earned"] == ["한 줄 소감 남기기"]
     assert cl.post("/api/activity/check", json={"type": "exercise"}, headers=h).json()["catchup"] == 0  # 하루 한 번
 
@@ -126,7 +126,9 @@ def test_quests_and_catchup(monkeypatch, cl):
             db.execute("insert into activities (user_id, type, kst_date) values (%s, 'qt', %s)", (me, date(2026, 10, d)))
     assert "이번 주 5일 인증" in cl.get("/api/quests", headers=h).json()["earned"]
     mine = next(m for m in cl.get("/api/race/leaderboard", headers=h).json() if m["id"] == me)
-    assert mine["total_distance"] == 15 + 4 * 5 + 5 + 2 + 3 + 20  # 완주일+4일+따라잡기+소감+응원+주간
+    assert mine["total_distance"] == (
+        (main.BASE_STEP + main.SPURT_STEP) + 4 * main.BASE_STEP      # 완주한 하루 + 인증만 한 4일
+        + main.CATCHUP_BONUS + main.QUEST_MEMO + main.QUEST_CHEER + main.QUEST_WEEK5)
 
     with psycopg.connect(pg.get_uri(), autocommit=True) as db:  # 다른 테스트를 위해 원상복구
         db.execute("delete from pokes where from_user = %s", (me,))
@@ -152,8 +154,9 @@ def test_flow(monkeypatch, cl):
     assert cl.post("/api/activity/check", json={"type": "qt"}, headers=h).json()["advance"] == 5
     assert cl.post("/api/activity/check", json={"type": "qt"}, headers=h).status_code == 409
     r = cl.post("/api/activity/check", json={"type": "exercise", "memo": "런닝 3km"}, headers=h).json()
-    # 완주 10m + 한 줄 소감 퀘스트 2m
-    assert (r["advance"], r["total_distance"], r["streak"]) == (12, 17, 1)
+    # 완주 보너스 + 한 줄 소감 퀘스트
+    assert (r["advance"], r["total_distance"], r["streak"]) == (
+        main.SPURT_STEP + main.QUEST_MEMO, main.BASE_STEP + main.SPURT_STEP + main.QUEST_MEMO, 1)
     assert r["earned"] == ["한 줄 소감 남기기"]
 
     day = date(2026, 9, 22)  # 다음날: 이어서 완주하면 2일

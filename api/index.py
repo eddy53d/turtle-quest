@@ -34,14 +34,14 @@ RP_ID = os.environ.get("RP_ID", "localhost")
 ORIGINS = [o.strip() for o in os.environ.get("ORIGINS", "http://localhost:3000").split(",") if o.strip()]
 ADMIN_NAMES = {n.strip() for n in os.environ.get("ADMIN_NAMES", "홍승원").split(",") if n.strip()}
 DEFAULT_PIN = os.environ.get("DEFAULT_PIN", "0412")  # 공통 초기 PIN — 로그인하면 변경을 요구
-BASE_STEP, SPURT_STEP = 5, 10
+BASE_STEP, SPURT_STEP = 5, 10           # 첫 인증 +5m, 같은 날 두 번째 인증 +10m(보너스 포함)
 
 # 퀘스트 보상(m)과 조건. 보너스는 bonuses 테이블에 쌓이고 거리 재계산 때 합산된다.
 QUEST_MEMO, QUEST_CHEER = 2, 3          # 일일: 한 줄 소감 / 소그룹 응원
 QUEST_WEEK5, QUEST_FULL3 = 20, 15       # 주간: 5일 인증 / 완주 3일
-CATCHUP_BONUS = 5                       # 평균에 한참 못 미치면 인증한 날마다 추가
-CATCHUP_RATIO = 0.8                     # 소그룹 평균의 80% 미만이면 따라잡기 대상
-WEEK_GOAL_PER_PERSON = 5                # 협동 목표: 1인당 주 5회 인증  # 첫 인증 +5m, 같은 날 두 번째 인증 +10m(보너스 5m 포함) — shared/quest.ts와 동일
+CATCHUP_BONUS = 10                      # 평균에 한참 못 미치면 인증한 날마다 추가
+CATCHUP_RATIO = 0.6                     # 소그룹 평균의 60% 미만이면 따라잡기 대상
+WEEK_GOAL_TOTAL = 20                    # 협동 목표: 소그룹 전체 주 20회 인증
 
 # ── 날짜/스트릭 로직 (KST, 순수 함수) ────────────────────────────────────────
 # 자정 초기화는 크론 없이 처리: '오늘' 상태는 activities.kst_date로 매번 계산하고,
@@ -273,7 +273,6 @@ def quest_state(uid) -> dict:
     week = q("select kst_date, count(*) n from activities where user_id = %s and kst_date >= %s "
              "group by kst_date", uid, monday)
     group_week = q("select count(*) n from activities where kst_date >= %s", monday, one=True)["n"]
-    people = q("select count(*) n from users", one=True)["n"]
 
     done_types = {a["type"] for a in todays}
     quests = [
@@ -300,7 +299,7 @@ def quest_state(uid) -> dict:
             if q("insert into bonuses (user_id, kind, kst_date, meters) values (%s, %s, %s, %s) "
                  "on conflict do nothing returning id", uid, quest["id"], on, meters, one=True):
                 earned.append(quest["title"])
-    return {"quests": quests, "earned": earned, "week_goal": {"done": group_week, "target": people * WEEK_GOAL_PER_PERSON}}
+    return {"quests": quests, "earned": earned, "week_goal": {"done": group_week, "target": WEEK_GOAL_TOTAL}}
 
 
 def grant_catchup(uid) -> int:
